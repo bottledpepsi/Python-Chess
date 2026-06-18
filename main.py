@@ -12,6 +12,10 @@ from data.engine.bot             import ChessBot
 
 pygame.init()
 
+def resource_path(relative):
+    base = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base, relative)
+
 # ── Sound manager ─────────────────────────────────────────────────────────────
 class SoundManager:
     def __init__(self):
@@ -21,8 +25,8 @@ class SoundManager:
                 pygame.mixer.init()
             except Exception:
                 return
-        for name, path in (('move',    'data/sounds/move.ogg'),
-                            ('capture', 'data/sounds/capture.ogg')):
+        for name, path in (('move',    resource_path('data/sounds/move.ogg')),
+                            ('capture', resource_path('data/sounds/capture.ogg'))):
             try:
                 s = pygame.mixer.Sound(path)
                 s.set_volume(0.6)
@@ -212,7 +216,7 @@ _NOTATION_TO_PT = {
 }
 
 def _load(name, color_char, size):
-    img = pygame.image.load(f'data/imgs/{color_char}_{name}.png').convert_alpha()
+    img = pygame.image.load(resource_path(f'data/imgs/{color_char}_{name}.png')).convert_alpha()
     return pygame.transform.smoothscale(img, (size, size))
 
 PIECE_SIZE   = int(TILE * 0.88)
