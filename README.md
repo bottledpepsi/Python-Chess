@@ -85,7 +85,7 @@ PyInstaller --onedir --windowed --icon=icon.ico --add-data "data:data" --name "P
  
 **Windows:**
 ```bash
-PyInstaller --onefile --icon=icon.ico --add-data "data;data" --name "PythonChess" main.py
+PyInstaller --onefile --windowed --icon=icon.ico --add-data "data;data" --name "PythonChess" main.py
 ```
 
 ---
