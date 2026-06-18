@@ -1,5 +1,6 @@
 """
-ChessBot — difficulty-aware move selector with probabilistic blunder injection.
+ChessBot — difficulty-aware move selector with probabilistic blunder injection
+           and GM-level Polyglot opening book support.
 
 Architecture overview
 ---------------------
@@ -7,7 +8,22 @@ The public entry point is a single method:
 
     move = bot.get_move(board, color, difficulty_level)   # difficulty_level: 1–10
 
-Internally this orchestrates three distinct stages:
+Internally this orchestrates four distinct stages:
+
+  Stage 0 – Opening book lookup (gm2001.bin)
+      On every bot turn while the book is active, query the Polyglot opening
+      book for all entries matching the current board position.  If any entries
+      exist, one is chosen at random (weighted by the entry's weight field) and
+      returned immediately — bypassing all minimax logic.
+
+      Tracking the chosen line
+      ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
+      At game start the bot picks ONE random opening line from all root
+      entries.  It tries to follow that line move-by-move.  If the human
+      deviates, the bot searches the book for any entries that still match
+      the current position (regardless of which line they come from) and
+      picks randomly among those.  Once the current position has NO book
+      entries at all, the book phase ends for the rest of the game.
 
   Stage 1 – Checkmate override
       Before any probability rolls, scan every root legal move for an
@@ -52,8 +68,11 @@ Pool is bounds-checked: if fewer than N candidates exist the weights
 are sliced and re-normalised automatically.
 """
 
+import os
 import random
+import time
 import chess
+import chess.polyglot
 from data.engine.piece_tables import PIECE_DATA as _RAW
 
 # ── Constants ─────────────────────────────────────────────────────────────────
@@ -369,11 +388,44 @@ def _rank_all_moves(board, depth, bot_color, killers, tt):
     return scored
 
 
+# ── Opening book helper ───────────────────────────────────────────────────────
+
+def _weighted_book_choice(entries):
+    """
+    Pick one entry from a list of polyglot entries using weight-proportional
+    random selection.  Falls back to uniform if all weights are zero.
+    """
+    total = sum(e.weight for e in entries)
+    if total == 0:
+        return random.choice(entries)
+    roll = random.uniform(0, total)
+    cumulative = 0
+    for entry in entries:
+        cumulative += entry.weight
+        if roll < cumulative:
+            return entry
+    return entries[-1]
+
+
 # ── Public bot class ──────────────────────────────────────────────────────────
 
 class ChessBot:
     """
-    Chess engine with unified 1–10 difficulty control.
+    Chess engine with unified 1–10 difficulty control and Polyglot opening
+    book support (gm2001.bin).
+
+    Opening book behaviour
+    ----------------------
+    - On the first bot move the book is queried for the start position.
+      All available entries are candidates; one is chosen by weighted random
+      selection (proportional to the entry's weight field).
+    - On subsequent bot moves, the current board position is looked up.
+      If entries exist, one is chosen randomly from those entries.
+    - As soon as the current position has no book entries (because the human
+      played an unexpected move and no continuations remain), the book phase
+      ends permanently for this game.
+    - clear_tt() / new-game resets the book state so the next game picks a
+      fresh line.
 
     Public API
     ----------
@@ -382,43 +434,116 @@ class ChessBot:
     bot.clear_tt()
     """
 
-    def __init__(self, max_depth: int = 3):
-        # max_depth retained for compatibility; actual depth is set per-call
-        # from DIFFICULTY_CONFIG when using get_move(... difficulty_level).
+    def __init__(self, max_depth: int = 3, book_path: str = None):
         self.max_depth = max_depth
         self._tt = {}   # transposition table; persists across moves in a game
+
+        # ── Opening book setup ────────────────────────────────────────────────
+        # book_path must be supplied by the caller (e.g. via resource_path in
+        # main.py).  If None or the file is absent the bot skips book play.
+        self._book_path = book_path
+        self._book_active = False   # True once successfully opened
+        self._book_in_use = True    # False once the position leaves the book
+        self._book_reader = None    # MemoryMappedReader, kept open for the game
+
+        self._open_book()
+
+    # ── Book lifecycle ────────────────────────────────────────────────────────
+
+    def _open_book(self):
+        """Try to open the Polyglot book file.  Silently no-ops if None or missing."""
+        if not self._book_path or not os.path.isfile(self._book_path):
+            if self._book_path:
+                print(f'[Book] Not found: {self._book_path}  (will use engine only)')
+            self._book_active = False
+            self._book_in_use = False
+            return
+        try:
+            self._book_reader = chess.polyglot.open_reader(self._book_path)
+            self._book_active = True
+            self._book_in_use = True
+            print(f'[Book] Loaded: {self._book_path}')
+        except Exception as exc:
+            print(f'[Book] Failed to open {self._book_path}: {exc}')
+            self._book_active = False
+            self._book_in_use = False
+
+    def _reset_book(self):
+        """
+        Called at game start (clear_tt).  Closes and re-opens the reader so
+        each new game starts fresh with a new random line selection.
+        """
+        if self._book_reader is not None:
+            try:
+                self._book_reader.close()
+            except Exception:
+                pass
+            self._book_reader = None
+        self._book_active = False
+        self._book_in_use = False
+        self._open_book()
+
+    def _query_book(self, board):
+        """
+        Query the book for the current position.
+
+        Returns a chess.Move chosen by weighted random selection, or None if:
+          - the book is not active / exhausted, or
+          - no entries exist for this position (book phase ends here).
+        """
+        if not self._book_active or not self._book_in_use:
+            return None
+
+        try:
+            entries = list(self._book_reader.find_all(board))
+        except Exception as exc:
+            print(f'[Book] Read error: {exc}')
+            self._book_in_use = False
+            return None
+
+        if not entries:
+            # Human deviated beyond all book lines — exit book phase
+            self._book_in_use = False
+            print('[Book] No entries for this position — exiting book phase')
+            return None
+
+        chosen = _weighted_book_choice(entries)
+        move   = chosen.move
+
+        # Normalise promotion piece (polyglot sometimes omits it for queens)
+        if move.promotion is None and board.piece_type_at(move.from_square) == chess.PAWN:
+            dest_rank = chess.square_rank(move.to_square)
+            if dest_rank in (0, 7):
+                move = chess.Move(move.from_square, move.to_square,
+                                  promotion=chess.QUEEN)
+
+        # Sanity-check: the book move must be legal in this position
+        if move not in board.legal_moves:
+            print(f'[Book] Illegal book move {move.uci()} — exiting book phase')
+            self._book_in_use = False
+            return None
+
+        print(f'[Book] Playing book move: {move.uci()}  '
+              f'(weight {chosen.weight}, {len(entries)} candidate(s))')
+        return move
 
     # ── Public interface ──────────────────────────────────────────────────────
 
     def clear_tt(self):
-        """Clear the transposition table. Call at the start of every new game."""
+        """
+        Clear the transposition table and reset the opening book for a new game.
+        Call at the start of every new game.
+        """
         self._tt.clear()
+        self._reset_book()
 
     def get_move(self, board, color, difficulty_level: int = 10):
         """
         Return the selected move for *color* given the unified difficulty level.
-
-        Decision pipeline
-        -----------------
-        1. Checkmate override  — if any root move delivers immediate mate,
-           return it unconditionally (applies to ALL difficulty levels).
-        2. Depth-ranked search — evaluate every root move via alpha-beta at
-           the depth prescribed by DIFFICULTY_CONFIG[difficulty_level].
-           Retain the top-5 candidates.
-        3. Blunder injection   — roll against the level's blunder_prob.
-           If clean (or Level 10): play the best move.
-           If blunder: weighted random pick from the runner-up pool.
-
-        Parameters
-        ----------
-        board            : chess.Board  (a copy — mutated during search then restored)
-        color            : 'white' | 'black'
-        difficulty_level : int 1–10 (default 10 = max strength)
-
-        Returns
-        -------
-        chess.Move  (guaranteed non-None if board has legal moves)
+        Guaranteed to take at least 1.0 second before returning.
         """
+        start_time = time.time()  # <--- Record start time
+
         cfg          = DIFFICULTY_CONFIG.get(difficulty_level, DIFFICULTY_CONFIG[10])
         depth        = cfg['depth']
         blunder_prob = cfg['blunder_prob']
@@ -431,47 +556,58 @@ class ChessBot:
             f'blunder {blunder_prob:.0%} | TT: {len(self._tt)} entries'
         )
 
-        # ── Stage 1: Checkmate override ───────────────────────────────────────
-        # Before any probability rolls, sweep root moves for an instant win.
-        # A checkmate move is played regardless of difficulty setting.
-        mate_move = self._find_immediate_checkmate(board)
-        if mate_move:
-            bm = (f'{chess.square_name(mate_move.from_square)}'
-                  f' -> {chess.square_name(mate_move.to_square)}')
-            print(f'[Bot] ★ Checkmate override! Playing {bm}')
-            return mate_move
+        # Helper internal function to handle the original pipeline return logic
+        def _determine_move():
+            # ── Stage 0: Opening book ─────────────────────────────────────────
+            book_move = self._query_book(board)
+            if book_move is not None:
+                return book_move
 
-        # ── Stage 2: Search for top-5 candidates ─────────────────────────────
-        top_moves = self._search_top_n(board, color, depth, n=5)
+            # ── Stage 1: Checkmate override ───────────────────────────────────
+            mate_move = self._find_immediate_checkmate(board)
+            if mate_move:
+                bm = (f'{chess.square_name(mate_move.from_square)}'
+                      f' -> {chess.square_name(mate_move.to_square)}')
+                print(f'[Bot] ★ Checkmate override! Playing {bm}')
+                return mate_move
 
-        # Fallback: if somehow search returns nothing, grab any legal move
-        if not top_moves:
-            fallback = list(board.legal_moves)
-            return fallback[0] if fallback else None
+            # ── Stage 2: Search for top-5 candidates ───────────────────────────
+            top_moves = self._search_top_n(board, color, depth, n=5)
 
-        best_move = top_moves[0][1]
+            if not top_moves:
+                fallback = list(board.legal_moves)
+                return fallback[0] if fallback else None
 
-        # ── Stage 3: Blunder injection ────────────────────────────────────────
-        # Level 10 has blunder_prob=0.0, always plays best.
-        # Otherwise roll; if the roll passes cleanly, also play best.
-        if blunder_prob == 0.0 or random.random() >= blunder_prob:
-            bm = (f'{chess.square_name(best_move.from_square)}'
-                  f' -> {chess.square_name(best_move.to_square)}')
-            print(f'[Bot] → Best move: {bm}  (score {top_moves[0][0]})')
-            return best_move
+            best_move = top_moves[0][1]
 
-        # Blunder triggered — select from runner-up pool
-        pool = top_moves[1:]   # 2nd through 5th best
-        if not pool:
-            # Only one legal move available; cannot blunder
-            return best_move
+            # ── Stage 3: Blunder injection ────────────────────────────────────
+            if blunder_prob == 0.0 or random.random() >= blunder_prob:
+                bm = (f'{chess.square_name(best_move.from_square)}'
+                      f' -> {chess.square_name(best_move.to_square)}')
+                print(f'[Bot] → Best move: {bm}  (score {top_moves[0][0]})')
+                return best_move
 
-        selected = self._weighted_blunder_select(pool)
-        bm = (f'{chess.square_name(selected.from_square)}'
-              f' -> {chess.square_name(selected.to_square)}')
-        rank = next(i + 2 for i, (_, m) in enumerate(pool) if m == selected)
-        print(f'[Bot] ↯ Blunder! Playing rank-{rank} move: {bm}')
-        return selected
+            pool = top_moves[1:]   
+            if not pool:
+                return best_move
+
+            selected = self._weighted_blunder_select(pool)
+            bm = (f'{chess.square_name(selected.from_square)}'
+                  f' -> {chess.square_name(selected.to_square)}')
+            rank = next(i + 2 for i, (_, m) in enumerate(pool) if m == selected)
+            print(f'[Bot] ↯ Blunder! Playing rank-{rank} move: {bm}')
+            return selected
+
+        # Get the chosen move from the pipeline
+        final_move = _determine_move()
+
+        # ── Enforce minimum 1-second delay ────────────────────────────────────
+        elapsed = time.time() - start_time
+        remaining = 1.0 - elapsed
+        if remaining > 0:
+            time.sleep(remaining)
+
+        return final_move
 
     # ── Private helpers ───────────────────────────────────────────────────────
 

@@ -20,24 +20,51 @@ def resource_path(relative):
 class SoundManager:
     def __init__(self):
         self._sounds = {}
+        self.audio_enabled = False
+
+        # 1. Try to initialize the mixer
         if not pygame.mixer.get_init():
             try:
                 pygame.mixer.init()
-            except Exception:
+                self.audio_enabled = True
+                print("[SoundManager] Pygame mixer initialized successfully.")
+            except Exception as e:
+                print(f"[SoundManager] WARNING: Failed to initialize pygame.mixer. Running WITHOUT audio. Error: {e}")
                 return
-        for name, path in (('move',    resource_path('data/sounds/move.ogg')),
-                            ('capture', resource_path('data/sounds/capture.ogg'))):
+        else:
+            self.audio_enabled = True
+
+        # 2. Try to load sound assets
+        sound_assets = (
+            ('move', resource_path('data/sounds/move.ogg')),
+            ('capture', resource_path('data/sounds/capture.ogg'))
+        )
+
+        for name, path in sound_assets:
             try:
                 s = pygame.mixer.Sound(path)
                 s.set_volume(0.6)
                 self._sounds[name] = s
-            except Exception:
+                print(f"[SoundManager] Loaded sound asset: '{name}' from {path}")
+            except Exception as e:
+                print(f"[SoundManager] WARNING: Could not load sound file '{name}' at {path}. Error: {e}")
                 pass
 
+        if not self._sounds:
+            print("[SoundManager] Notice: No sound assets were loaded. System will remain silent.")
+
     def play(self, name):
+        # Quick fallback if mixer init completely failed or asset is missing
+        if not self.audio_enabled:
+            return
+            
         s = self._sounds.get(name)
         if s:
-            s.play()
+            try:
+                s.play()
+            except Exception as e:
+                print(f"[SoundManager] Error playing sound '{name}': {e}")
+
 
 sounds = SoundManager()
 
@@ -395,7 +422,7 @@ winner_alpha  = 0
 game_over     = False
 player_color  = 'white'
 board_flipped = False
-bot           = ChessBot(max_depth=3)
+bot           = ChessBot(max_depth=3, book_path=resource_path('data/book/gm2001.bin'))
 bot_thread    = None
 bot_result    = None
 bot_thinking  = False
