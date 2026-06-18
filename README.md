@@ -65,10 +65,22 @@ pip install -r requirements.txt
 # Run the game
 python main.py
 ```
+---
 
-On Windows with multiple Python versions:
+## Building a Standalone Executable
+To compile the game into a single executable using [PyInstaller](https://pyinstaller.org/):
 ```bash
-py -3.12 main.py
+pip install pyinstaller
+```
+ 
+**Linux / macOS:**
+```bash
+PyInstaller --onefile --icon=icon.ico --add-data "data:data" --name "PythonChess" main.py
+```
+ 
+**Windows:**
+```bash
+PyInstaller --onefile --icon=icon.ico --add-data "data;data" --name "PythonChess" main.py
 ```
 
 ---
