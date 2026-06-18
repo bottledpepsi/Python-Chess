@@ -46,7 +46,7 @@ A feature-rich desktop chess game built with Python and pygame, powered by the `
 
 ## Requirements
 
-- Python 3.10+
+- `python >= 3.10.0`
 - `pygame >= 2.0.0`
 - `chess >= 1.9.0`
 
