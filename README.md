@@ -73,9 +73,14 @@ To compile the game into a single executable using [PyInstaller](https://pyinsta
 pip install pyinstaller
 ```
  
-**Linux / macOS:**
+**Linux:**
 ```bash
 PyInstaller --onefile --icon=icon.ico --add-data "data:data" --name "PythonChess" main.py
+```
+
+**macOS:**
+```bash
+PyInstaller --onedir --windowed --icon=icon.ico --add-data "data:data" --name "PythonChess" main.py
 ```
  
 **Windows:**
