@@ -71,9 +71,18 @@ are sliced and re-normalised automatically.
 import os
 import random
 import time
+
 import chess
 import chess.polyglot
-from data.engine.piece_tables import PIECE_DATA as _RAW
+
+from chess_game.engine.piece_tables import PIECE_DATA as _RAW
+from chess_game.log import get_logger
+
+_LOGGER = get_logger()
+
+
+class SearchAborted(Exception):
+    """Raised internally when an in-flight search's abort event is set."""
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -136,7 +145,7 @@ for sq in range(64):
     _PST_INDEX[chess.WHITE][sq] = (7 - rank) * 8 + file
     _PST_INDEX[chess.BLACK][sq] = rank * 8 + file
 
-_HISTORY = {}
+_HISTORY: dict[str, int] = {}
 
 
 def _pst_index(sq, color):
@@ -202,12 +211,15 @@ def _order_moves(board, moves, killers, tt_move):
 
 # ── Quiescence search ─────────────────────────────────────────────────────────
 
-def _quiesce(board, alpha, beta, maximising, bot_color):
+def _quiesce(board, alpha, beta, maximising, bot_color, abort=None):
     """
     Capture-only search past depth 0 to avoid the horizon effect.
     Stand-pat score acts as a lower bound — the side to move can always
     choose not to capture.
     """
+    if abort is not None and abort.is_set():
+        raise SearchAborted()
+
     if board.is_game_over():
         outcome = board.outcome()
         if outcome is None or outcome.winner is None:
@@ -221,7 +233,7 @@ def _quiesce(board, alpha, beta, maximising, bot_color):
         alpha = max(alpha, stand_pat)
         for move in board.generate_legal_captures():
             board.push(move)
-            score = _quiesce(board, alpha, beta, False, bot_color)
+            score = _quiesce(board, alpha, beta, False, bot_color, abort)
             board.pop()
             alpha = max(alpha, score)
             if alpha >= beta:
@@ -233,7 +245,7 @@ def _quiesce(board, alpha, beta, maximising, bot_color):
         beta = min(beta, stand_pat)
         for move in board.generate_legal_captures():
             board.push(move)
-            score = _quiesce(board, alpha, beta, True, bot_color)
+            score = _quiesce(board, alpha, beta, True, bot_color, abort)
             board.pop()
             beta = min(beta, score)
             if beta <= alpha:
@@ -244,13 +256,16 @@ def _quiesce(board, alpha, beta, maximising, bot_color):
 # ── Alpha-beta with TT + killers ──────────────────────────────────────────────
 
 def _alphabeta(board, depth, alpha, beta, maximising, bot_color,
-               killers, tt, root=False):
+               killers, tt, root=False, abort=None):
     """
     Recursive alpha-beta with:
       - Transposition table (exact / lower / upper bound entries)
       - Killer move heuristic (two slots per depth)
       - Quiescence search at leaf nodes
     """
+    if abort is not None and abort.is_set():
+        raise SearchAborted()
+
     orig_alpha = alpha
 
     # ── TT lookup ─────────────────────────────────────────────────────────────
@@ -278,7 +293,7 @@ def _alphabeta(board, depth, alpha, beta, maximising, bot_color,
         return (INF if outcome.winner == bot_color else -INF), None
 
     if depth == 0:
-        return _quiesce(board, alpha, beta, maximising, bot_color), None
+        return _quiesce(board, alpha, beta, maximising, bot_color, abort), None
 
     # ── Move generation + ordering ────────────────────────────────────────────
     depth_killers = killers[depth] if depth < len(killers) else []
@@ -295,28 +310,28 @@ def _alphabeta(board, depth, alpha, beta, maximising, bot_color,
         if move_index == 0:
             score, _ = _alphabeta(
                 board, depth - 1, alpha, beta,
-                not maximising, bot_color, killers, tt
+                not maximising, bot_color, killers, tt, abort=abort
             )
         else:
             if maximising:
                 score, _ = _alphabeta(
                     board, depth - 1, alpha, min(beta, alpha + 1),
-                    not maximising, bot_color, killers, tt
+                    not maximising, bot_color, killers, tt, abort=abort
                 )
                 if score > alpha and score < beta:
                     score, _ = _alphabeta(
                         board, depth - 1, score, beta,
-                        not maximising, bot_color, killers, tt
+                        not maximising, bot_color, killers, tt, abort=abort
                     )
             else:
                 score, _ = _alphabeta(
                     board, depth - 1, max(alpha, beta - 1), beta,
-                    not maximising, bot_color, killers, tt
+                    not maximising, bot_color, killers, tt, abort=abort
                 )
                 if score > alpha and score < beta:
                     score, _ = _alphabeta(
                         board, depth - 1, alpha, score,
-                        not maximising, bot_color, killers, tt
+                        not maximising, bot_color, killers, tt, abort=abort
                     )
         board.pop()
 
@@ -354,7 +369,7 @@ def _alphabeta(board, depth, alpha, beta, maximising, bot_color,
 
 # ── Root ranking (no inter-sibling pruning) ───────────────────────────────────
 
-def _rank_all_moves(board, depth, bot_color, killers, tt):
+def _rank_all_moves(board, depth, bot_color, killers, tt, abort=None):
     """
     Score every legal root move at `depth`.
 
@@ -375,10 +390,12 @@ def _rank_all_moves(board, depth, bot_color, killers, tt):
     )
 
     for move in moves:
+        if abort is not None and abort.is_set():
+            raise SearchAborted()
         board.push(move)
         score, _ = _alphabeta(
             board, depth - 1, -INF, INF,
-            False, bot_color, killers, tt
+            False, bot_color, killers, tt, abort=abort
         )
         board.pop()
         scored.append((score, move))
@@ -434,9 +451,9 @@ class ChessBot:
     bot.clear_tt()
     """
 
-    def __init__(self, max_depth: int = 3, book_path: str = None):
+    def __init__(self, max_depth: int = 3, book_path: str | None = None):
         self.max_depth = max_depth
-        self._tt = {}   # transposition table; persists across moves in a game
+        self._tt: dict[tuple, tuple[int, int, int, chess.Move | None]] = {}   # transposition table; persists across moves in a game
 
         # ── Opening book setup ────────────────────────────────────────────────
         # book_path must be supplied by the caller (e.g. via resource_path in
@@ -454,7 +471,7 @@ class ChessBot:
         """Try to open the Polyglot book file.  Silently no-ops if None or missing."""
         if not self._book_path or not os.path.isfile(self._book_path):
             if self._book_path:
-                print(f'[Book] Not found: {self._book_path}  (will use engine only)')
+                _LOGGER.warning('Book not found: %s (will use engine only)', self._book_path)
             self._book_active = False
             self._book_in_use = False
             return
@@ -462,9 +479,9 @@ class ChessBot:
             self._book_reader = chess.polyglot.open_reader(self._book_path)
             self._book_active = True
             self._book_in_use = True
-            print(f'[Book] Loaded: {self._book_path}')
-        except Exception as exc:
-            print(f'[Book] Failed to open {self._book_path}: {exc}')
+            _LOGGER.info('Book loaded: %s', self._book_path)
+        except OSError:
+            _LOGGER.exception('Failed to open book: %s', self._book_path)
             self._book_active = False
             self._book_in_use = False
 
@@ -476,8 +493,8 @@ class ChessBot:
         if self._book_reader is not None:
             try:
                 self._book_reader.close()
-            except Exception:
-                pass
+            except OSError:
+                _LOGGER.exception('Failed to close book reader')
             self._book_reader = None
         self._book_active = False
         self._book_in_use = False
@@ -496,15 +513,15 @@ class ChessBot:
 
         try:
             entries = list(self._book_reader.find_all(board))
-        except Exception as exc:
-            print(f'[Book] Read error: {exc}')
+        except OSError:
+            _LOGGER.exception('Book read error')
             self._book_in_use = False
             return None
 
         if not entries:
             # Human deviated beyond all book lines — exit book phase
             self._book_in_use = False
-            print('[Book] No entries for this position — exiting book phase')
+            _LOGGER.debug('No book entries for this position — exiting book phase')
             return None
 
         chosen = _weighted_book_choice(entries)
@@ -519,12 +536,12 @@ class ChessBot:
 
         # Sanity-check: the book move must be legal in this position
         if move not in board.legal_moves:
-            print(f'[Book] Illegal book move {move.uci()} — exiting book phase')
+            _LOGGER.warning('Illegal book move %s — exiting book phase', move.uci())
             self._book_in_use = False
             return None
 
-        print(f'[Book] Playing book move: {move.uci()}  '
-              f'(weight {chosen.weight}, {len(entries)} candidate(s))')
+        _LOGGER.debug('Playing book move: %s (weight %s, %d candidate(s))',
+                       move.uci(), chosen.weight, len(entries))
         return move
 
     # ── Public interface ──────────────────────────────────────────────────────
@@ -537,42 +554,51 @@ class ChessBot:
         self._tt.clear()
         self._reset_book()
 
-    def get_move(self, board, color, difficulty_level: int = 10):
+    def get_move(self, board, color, difficulty_level: int = 10, abort=None):
         """
         Return the selected move for *color* given the unified difficulty level.
-        Guaranteed to take at least 1.0 second before returning.
+        Guaranteed to take at least 1.0 second before returning, unless the
+        search is aborted first.
+
+        Parameters
+        ----------
+        abort : threading.Event, optional
+            If set at any point during the search, raises SearchAborted so
+            the caller (BotWorker) can drop the in-flight computation
+            instead of blocking on a stale move.
         """
-        start_time = time.time()  # <--- Record start time
+        start_time = time.time()
 
         cfg          = DIFFICULTY_CONFIG.get(difficulty_level, DIFFICULTY_CONFIG[10])
         depth        = cfg['depth']
         blunder_prob = cfg['blunder_prob']
 
-        # Update max_depth so it reflects the active configuration
-        self.max_depth = depth
+        self.max_depth = int(depth)
 
-        print(
-            f'[Bot] Level {difficulty_level} | depth {depth} | '
-            f'blunder {blunder_prob:.0%} | TT: {len(self._tt)} entries'
+        _LOGGER.debug(
+            'Level %s | depth %s | blunder %.0f%% | TT: %d entries',
+            difficulty_level, depth, blunder_prob * 100, len(self._tt)
         )
 
-        # Helper internal function to handle the original pipeline return logic
         def _determine_move():
-            # ── Stage 0: Opening book ─────────────────────────────────────────
+            if abort is not None and abort.is_set():
+                raise SearchAborted()
+
             book_move = self._query_book(board)
             if book_move is not None:
                 return book_move
 
-            # ── Stage 1: Checkmate override ───────────────────────────────────
+            if abort is not None and abort.is_set():
+                raise SearchAborted()
+
             mate_move = self._find_immediate_checkmate(board)
             if mate_move:
                 bm = (f'{chess.square_name(mate_move.from_square)}'
                       f' -> {chess.square_name(mate_move.to_square)}')
-                print(f'[Bot] ★ Checkmate override! Playing {bm}')
+                _LOGGER.debug('Checkmate override! Playing %s', bm)
                 return mate_move
 
-            # ── Stage 2: Search for top-5 candidates ───────────────────────────
-            top_moves = self._search_top_n(board, color, depth, n=5)
+            top_moves = self._search_top_n(board, color, depth, n=5, abort=abort)
 
             if not top_moves:
                 fallback = list(board.legal_moves)
@@ -580,14 +606,13 @@ class ChessBot:
 
             best_move = top_moves[0][1]
 
-            # ── Stage 3: Blunder injection ────────────────────────────────────
             if blunder_prob == 0.0 or random.random() >= blunder_prob:
                 bm = (f'{chess.square_name(best_move.from_square)}'
                       f' -> {chess.square_name(best_move.to_square)}')
-                print(f'[Bot] → Best move: {bm}  (score {top_moves[0][0]})')
+                _LOGGER.debug('Best move: %s (score %s)', bm, top_moves[0][0])
                 return best_move
 
-            pool = top_moves[1:]   
+            pool = top_moves[1:]
             if not pool:
                 return best_move
 
@@ -595,17 +620,18 @@ class ChessBot:
             bm = (f'{chess.square_name(selected.from_square)}'
                   f' -> {chess.square_name(selected.to_square)}')
             rank = next(i + 2 for i, (_, m) in enumerate(pool) if m == selected)
-            print(f'[Bot] ↯ Blunder! Playing rank-{rank} move: {bm}')
+            _LOGGER.debug('Blunder! Playing rank-%d move: %s', rank, bm)
             return selected
 
-        # Get the chosen move from the pipeline
         final_move = _determine_move()
 
-        # ── Enforce minimum 1-second delay ────────────────────────────────────
         elapsed = time.time() - start_time
         remaining = 1.0 - elapsed
         if remaining > 0:
-            time.sleep(remaining)
+            if abort is not None:
+                abort.wait(remaining)
+            else:
+                time.sleep(remaining)
 
         return final_move
 
@@ -631,7 +657,7 @@ class ChessBot:
                 return move
         return None
 
-    def _search_top_n(self, board, color, depth, n=5):
+    def _search_top_n(self, board, color, depth, n=5, abort=None):
         """
         Run iterative-deepening alpha-beta and return the top `n` root moves.
 
@@ -643,6 +669,10 @@ class ChessBot:
         Returns
         -------
         list of (score, chess.Move), length ≤ n, sorted best → worst
+
+        Raises
+        ------
+        SearchAborted if `abort` is set partway through the search.
         """
         bot_color = chess.WHITE if color == 'white' else chess.BLACK
         killers   = [[None, None] for _ in range(depth + 1)]
@@ -651,11 +681,11 @@ class ChessBot:
         for d in range(1, depth):
             _alphabeta(
                 board, d, -INF, INF,
-                True, bot_color, killers, self._tt, root=True
+                True, bot_color, killers, self._tt, root=True, abort=abort
             )
 
         # Final full-depth ranking (all root moves scored without inter-sibling pruning)
-        ranked = _rank_all_moves(board, depth, bot_color, killers, self._tt)
+        ranked = _rank_all_moves(board, depth, bot_color, killers, self._tt, abort=abort)
         return ranked[:n]
 
     def _weighted_blunder_select(self, pool):

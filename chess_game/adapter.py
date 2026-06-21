@@ -11,7 +11,6 @@ v3 additions
 
 import chess
 
-
 # Map chess piece type → old notation char (kept for tray-display compatibility)
 _NOTATION = {
     chess.PAWN:   ' ',
