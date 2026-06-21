@@ -81,7 +81,8 @@ def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
         raise
 
 
-def write_preferences(board_theme: str, arrow_theme: str, reduced_motion: bool = False) -> None:
+def write_preferences(board_theme: str, arrow_theme: str, reduced_motion: bool = False,
+                      fullscreen: bool = False) -> None:
     """Persist preferences atomically."""
     logger = get_logger()
     path = get_save_dir() / PREF_FILENAME
@@ -90,6 +91,7 @@ def write_preferences(board_theme: str, arrow_theme: str, reduced_motion: bool =
         "board_theme": board_theme,
         "arrow_theme": arrow_theme,
         "reduced_motion": reduced_motion,
+        "fullscreen": fullscreen,
     }
     try:
         _atomic_write_json(path, payload)
@@ -114,6 +116,7 @@ def read_preferences() -> dict[str, Any]:
                 "arrow_theme": payload.get("arrow_theme", ""),
                 # Old preference files predate this field, so default to False.
                 "reduced_motion": bool(payload.get("reduced_motion", False)),
+                "fullscreen": bool(payload.get("fullscreen", False)),
             }
             logger.info("Preferences loaded <- %s | %s", path, prefs)
             return prefs

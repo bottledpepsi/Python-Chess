@@ -14,9 +14,8 @@ from chess_game.theme import (
     DIFF_DESC,
     DIFF_TIER,
     MENU_ACCENT,
+    MENU_ACCENT_BRIGHT,
     MENU_BG,
-    MENU_BTN_HOV,
-    MENU_BTN_NORM,
     MENU_TEXT,
     MENU_TEXT_SUB,
     PICK_DARK,
@@ -33,8 +32,8 @@ def make_menu_buttons():
     cx, bw, bh, gap = WIN_W // 2, 280, 68, 18
     y0 = WIN_H // 2 + 30
     return [
-        Button((cx - bw // 2, y0, bw, bh), 'Play vs Friend', 'Local 2-player'),
-        Button((cx - bw // 2, y0 + bh + gap, bw, bh), 'Play vs Bot', 'AI opponent'),
+        Button((cx - bw // 2, y0, bw, bh), 'Local Play', 'Play on this device'),
+        Button((cx - bw // 2, y0 + bh + gap, bw, bh), 'Online Play', 'Coming soon', disabled=True),
         Button((cx - bw // 2, y0 + 2 * (bh + gap), bw, bh), 'Preferences', 'Board & Arrow themes'),
     ]
 
@@ -58,8 +57,105 @@ def draw_menu(screen, menu_buttons, fonts):
     screen.blit(foot, foot.get_rect(center=(cx, WIN_H - 22)))
 
 
+def draw_opponent_picker(screen, fonts, king_imgs):
+    """The 'Select Opponent' screen shown after clicking Local Play.
+
+    Deliberately styled to look distinct from the color picker (which uses
+    two side-by-side square cards with king portraits). This screen uses a
+    vertical stack of wide horizontal cards, each with a circular icon
+    badge on the left, a bold title, and a descriptive subtitle —
+    closer in spirit to a settings/list screen than a chooser.
+
+    Returns (rects_by_key, back_rect) where rects_by_key is
+    {'player': rect, 'bot': rect}.
+    """
+    screen.fill(MENU_BG)
+    cx = WIN_W // 2
+
+    # Distinct header style: a small kicker label above a larger title,
+    # rather than the color picker's single centred heading.
+    kicker = fonts.pick_s.render('LOCAL PLAY', True, MENU_ACCENT)
+    screen.blit(kicker, kicker.get_rect(center=(cx, 90)))
+    title = fonts.pick.render('Choose your opponent', True, MENU_TEXT)
+    screen.blit(title, title.get_rect(center=(cx, 122)))
+
+    mx, my = pygame.mouse.get_pos()
+    # Wide horizontal cards stacked vertically — visually nothing like the
+    # color picker's two side-by-side squares.
+    card_w, card_h = 520, 120
+    card_x = cx - card_w // 2
+    gap = 22
+    total_h = card_h * 2 + gap
+    y0 = WIN_H // 2 - total_h // 2 + 30
+
+    # Each card: (key, icon_img, icon_bg, title, subtitle, accent_color)
+    # Subtitles kept short to fit comfortably within the card width.
+    cards = [
+        ('player', king_imgs['white'], (60, 90, 60), 'Player',
+         'Two people, one screen. Pass the keyboard between moves.',
+         (120, 180, 100)),
+        ('bot', king_imgs['black'], (90, 60, 90), 'Bot',
+         'Challenge the computer. Pick a side and difficulty.',
+         (180, 120, 200)),
+    ]
+
+    # Pre-scale the king portraits down to fit inside the circular badge.
+    badge_r = 38
+    badge_inner = 60
+    scaled_icons = {
+        'player': pygame.transform.smoothscale(king_imgs['white'], (badge_inner, badge_inner)),
+        'bot': pygame.transform.smoothscale(king_imgs['black'], (badge_inner, badge_inner)),
+    }
+
+    rects = {}
+    for i, (key, _icon, icon_bg, label, sublabel, accent) in enumerate(cards):
+        rect = pygame.Rect(card_x, y0 + i * (card_h + gap), card_w, card_h)
+        hov = rect.collidepoint(mx, my)
+
+        # Card background: subtle two-tone fill on hover for a lift effect.
+        bg = (42, 42, 48) if hov else (30, 30, 34)
+        pygame.draw.rect(screen, bg, rect, border_radius=14)
+        # Border (accent on hover, neutral otherwise).
+        border_col = accent if hov else (62, 62, 68)
+        pygame.draw.rect(screen, border_col, rect, 2 if hov else 1, border_radius=14)
+
+        # Circular icon badge on the left, holding the (scaled) king portrait.
+        badge_cx = rect.x + 64
+        badge_cy = rect.centery
+        pygame.draw.circle(screen, icon_bg, (badge_cx, badge_cy), badge_r)
+        pygame.draw.circle(screen, accent, (badge_cx, badge_cy), badge_r, 2)
+        screen.blit(scaled_icons[key], scaled_icons[key].get_rect(center=(badge_cx, badge_cy)))
+
+        # Title + subtitle to the right of the badge.
+        text_x = badge_cx + badge_r + 22
+        lbl = fonts.btn.render(label, True, MENU_TEXT)
+        screen.blit(lbl, (text_x, rect.y + 32))
+        sub = fonts.btn_sub.render(sublabel, True, MENU_TEXT_SUB)
+        screen.blit(sub, (text_x, rect.y + 64))
+
+        # Right-side chevron hint that the card is clickable.
+        chevron = '\u203a'  # ›
+        ch = fonts.pick.render(chevron, True, accent if hov else (90, 90, 90))
+        screen.blit(ch, ch.get_rect(midright=(rect.right - 22, rect.centery)))
+
+        rects[key] = rect
+
+    # Footer hint.
+    hint = fonts.pick_s.render('Press Esc to go back', True, (90, 90, 90))
+    screen.blit(hint, hint.get_rect(center=(cx, WIN_H - 28)))
+
+    back_s = fonts.pick_s.render('\u2190 Back', True, MENU_TEXT_SUB)
+    screen.blit(back_s, (18, 18))
+    return rects, pygame.Rect(0, 0, 80, 36)
+
+
 def draw_color_picker(screen, fonts, king_imgs):
-    """Returns (rects_by_color, back_rect)."""
+    """Returns (rects_by_color, back_rect).
+
+    In the refactored flow this screen is reached from the OPPONENT_PICK
+    screen (after choosing Bot), so the Back button returns there rather
+    than to the main menu.
+    """
     screen.fill(MENU_BG)
     cx = WIN_W // 2
     s = fonts.pick.render('Choose your colour', True, MENU_TEXT)
@@ -184,93 +280,118 @@ _ARROW_THEME_CHOICES = ['blue', 'yellow', 'green', 'white', 'black']
 
 
 def draw_preferences(screen, current_board_theme, current_arrow_theme, reduced_motion, fonts):
-    """Returns (back_rect, board_rects, arrow_rects, motion_rect)."""
+    """Returns (back_rect, board_rects, arrow_rects, motion_rect).
+
+    Redesigned with a clean card-based layout: each preference group sits
+    in its own rounded card with a heading, a one-line description, and a
+    row of large swatches. The reduced-motion toggle is a proper pill
+    switch rather than a checkbox.
+    """
     screen.fill(MENU_BG)
     cx = WIN_W // 2
 
+    # ── Header ─────────────────────────────────────────────────────────
     title_s = fonts.pick.render('Preferences', True, MENU_TEXT)
-    screen.blit(title_s, title_s.get_rect(center=(cx, 50)))
+    screen.blit(title_s, title_s.get_rect(center=(cx, 56)))
+    sub_s = fonts.pick_s.render('Customise the look and feel of your board', True, MENU_TEXT_SUB)
+    screen.blit(sub_s, sub_s.get_rect(center=(cx, 86)))
 
-    board_label = fonts.diff_l.render('Board Theme', True, MENU_TEXT)
-    screen.blit(board_label, (cx - 120, 110))
+    mx, my = pygame.mouse.get_pos()
 
+    # ── Helper: draw a section card (rounded panel with a heading) ─────
+    def _section_card(y, h, heading, description):
+        rect = pygame.Rect(cx - 280, y, 560, h)
+        pygame.draw.rect(screen, (26, 26, 30), rect, border_radius=12)
+        pygame.draw.rect(screen, (52, 52, 58), rect, 1, border_radius=12)
+        h_s = fonts.diff_l.render(heading, True, MENU_TEXT)
+        screen.blit(h_s, (rect.x + 20, rect.y + 14))
+        d_s = fonts.btn_sub.render(description, True, MENU_TEXT_SUB)
+        screen.blit(d_s, (rect.x + 20, rect.y + 36))
+        return rect
+
+    # ── Board Theme card ───────────────────────────────────────────────
+    board_card = _section_card(120, 155, 'Board Theme', 'Choose the colour scheme for the squares.')
     board_rects = {}
-    board_y = 150
+    swatch_w, swatch_h = 110, 56
+    swatch_gap = 12
+    total_sw = swatch_w * len(_BOARD_THEME_CHOICES) + swatch_gap * (len(_BOARD_THEME_CHOICES) - 1)
+    sw_x0 = board_card.centerx - total_sw // 2
     for i, theme_name in enumerate(_BOARD_THEME_CHOICES):
         theme = BOARD_THEMES[theme_name]
         if theme_name == 'colorblind_safe':
-            label = 'Colourblind safe'
+            label = 'Colourblind'
         else:
             parts = theme_name.split('_')
             label = parts[0].capitalize() + ' & ' + parts[1].capitalize()
 
-        rect_x = cx - 120 + i * 100
-        rect = pygame.Rect(rect_x, board_y, 80, 60)
-
-        mx_, my_ = pygame.mouse.get_pos()
-        hov = rect.collidepoint(mx_, my_)
+        rect = pygame.Rect(sw_x0 + i * (swatch_w + swatch_gap), board_card.y + 60, swatch_w, swatch_h)
+        hov = rect.collidepoint(mx, my)
         selected = (current_board_theme == theme_name)
 
-        pygame.draw.rect(screen, theme['light'], (rect.x + 2, rect.y + 2, 35, 35))
-        pygame.draw.rect(screen, theme['dark'], (rect.x + 37, rect.y + 2, 35, 35))
+        # Preview: two side-by-side squares showing the light/dark colours.
+        half_w = (swatch_w - 4) // 2
+        pygame.draw.rect(screen, theme['light'], (rect.x + 2, rect.y + 2, half_w, swatch_h - 4), border_top_left_radius=8, border_bottom_left_radius=8)
+        pygame.draw.rect(screen, theme['dark'], (rect.x + 2 + half_w, rect.y + 2, swatch_w - 4 - half_w, swatch_h - 4), border_top_right_radius=8, border_bottom_right_radius=8)
 
-        border_col = MENU_ACCENT if selected else (MENU_BTN_HOV if hov else MENU_BTN_NORM)
+        border_col = MENU_ACCENT_BRIGHT if selected else ((90, 90, 96) if hov else (60, 60, 66))
         border_width = 3 if selected else 2
-        pygame.draw.rect(screen, border_col, rect, border_width, border_radius=8)
+        pygame.draw.rect(screen, border_col, rect, border_width, border_radius=10)
 
-        lbl = fonts.btn_sub.render(label, True, MENU_TEXT if selected else MENU_TEXT_SUB)
+        lbl_col = MENU_TEXT if selected else MENU_TEXT_SUB
+        lbl = fonts.btn_sub.render(label, True, lbl_col)
         screen.blit(lbl, lbl.get_rect(center=(rect.centerx, rect.bottom + 12)))
 
         board_rects[theme_name] = rect
 
-    arrow_label = fonts.diff_l.render('Arrow Theme', True, MENU_TEXT)
-    screen.blit(arrow_label, (cx - 120, 270))
-
+    # ── Arrow Theme card ───────────────────────────────────────────────
+    arrow_card = _section_card(295, 155, 'Arrow Theme', 'Colour used for right-click annotation arrows.')
     arrow_rects = {}
-    arrow_y = 310
+    n_arrows = len(_ARROW_THEME_CHOICES)
+    a_w, a_h = 90, 56
+    a_gap = 14
+    total_aw = a_w * n_arrows + a_gap * (n_arrows - 1)
+    aw_x0 = arrow_card.centerx - total_aw // 2
     for i, theme_name in enumerate(_ARROW_THEME_CHOICES):
         color = ARROW_THEMES[theme_name]
         display_color = color[:3]
         label = theme_name.capitalize()
 
-        rect_x = cx - 120 + i * 100
-        rect = pygame.Rect(rect_x, arrow_y, 80, 60)
-
-        mx_, my_ = pygame.mouse.get_pos()
-        hov = rect.collidepoint(mx_, my_)
+        rect = pygame.Rect(aw_x0 + i * (a_w + a_gap), arrow_card.y + 60, a_w, a_h)
+        hov = rect.collidepoint(mx, my)
         selected = (current_arrow_theme == theme_name)
 
-        pygame.draw.circle(screen, display_color, (rect.centerx, rect.centery - 10), 20)
-        pygame.draw.circle(screen, (80, 80, 80), (rect.centerx, rect.centery - 10), 20, 2)
+        # Preview: a centred filled circle in the arrow colour.
+        pygame.draw.circle(screen, display_color, (rect.centerx, rect.centery - 4), 20)
+        pygame.draw.circle(screen, (30, 30, 30), (rect.centerx, rect.centery - 4), 20, 1)
 
-        border_col = MENU_ACCENT if selected else (MENU_BTN_HOV if hov else MENU_BTN_NORM)
+        border_col = MENU_ACCENT_BRIGHT if selected else ((90, 90, 96) if hov else (60, 60, 66))
         border_width = 3 if selected else 2
-        pygame.draw.rect(screen, border_col, rect, border_width, border_radius=8)
+        pygame.draw.rect(screen, border_col, rect, border_width, border_radius=10)
 
-        lbl = fonts.btn_sub.render(label, True, MENU_TEXT if selected else MENU_TEXT_SUB)
-        screen.blit(lbl, lbl.get_rect(center=(rect.centerx, rect.bottom - 12)))
+        lbl_col = MENU_TEXT if selected else MENU_TEXT_SUB
+        lbl = fonts.btn_sub.render(label, True, lbl_col)
+        screen.blit(lbl, lbl.get_rect(center=(rect.centerx, rect.bottom + 12)))
 
         arrow_rects[theme_name] = rect
 
-    motion_label = fonts.diff_l.render('Reduced Motion', True, MENU_TEXT)
-    screen.blit(motion_label, (cx - 120, 400))
-
-    motion_rect = pygame.Rect(cx - 120, 432, 240, 40)
-    mx_, my_ = pygame.mouse.get_pos()
-    hov = motion_rect.collidepoint(mx_, my_)
-    border_col = MENU_ACCENT if reduced_motion else (MENU_BTN_HOV if hov else MENU_BTN_NORM)
-    pygame.draw.rect(screen, border_col, motion_rect, 2, border_radius=8)
-
-    box_rect = pygame.Rect(motion_rect.x + 10, motion_rect.y + 10, 20, 20)
-    pygame.draw.rect(screen, MENU_ACCENT if reduced_motion else MENU_BTN_NORM, box_rect, border_radius=4)
-    if reduced_motion:
-        pygame.draw.line(screen, MENU_TEXT, (box_rect.x + 4, box_rect.centery),
-                          (box_rect.centerx - 1, box_rect.bottom - 5), 2)
-        pygame.draw.line(screen, MENU_TEXT, (box_rect.centerx - 1, box_rect.bottom - 5),
-                          (box_rect.right - 3, box_rect.y + 4), 2)
-    motion_status = 'On — skip animations' if reduced_motion else 'Off — normal animations'
-    motion_s = fonts.btn_sub.render(motion_status, True, MENU_TEXT)
-    screen.blit(motion_s, (box_rect.right + 12, motion_rect.y + 11))
+    # ── Reduced Motion card ────────────────────────────────────────────
+    motion_card = _section_card(470, 110, 'Reduced Motion', 'Skip piece-slide and board-flip animations.')
+    # Pill-style toggle switch on the right side of the card.
+    pill_w, pill_h = 64, 30
+    motion_rect = pygame.Rect(motion_card.right - pill_w - 24, motion_card.y + 50, pill_w, pill_h)
+    hov = motion_rect.collidepoint(mx, my)
+    # Track background: bright accent when on, neutral when off.
+    track_col = MENU_ACCENT_BRIGHT if reduced_motion else ((70, 70, 76) if hov else (50, 50, 56))
+    pygame.draw.rect(screen, track_col, motion_rect, border_radius=pill_h // 2)
+    # Knob: slides right when on, left when off.
+    knob_r = pill_h // 2 - 4
+    knob_x = motion_rect.right - knob_r - 4 if reduced_motion else motion_rect.x + knob_r + 4
+    pygame.draw.circle(screen, (235, 235, 235), (knob_x, motion_rect.centery), knob_r)
+    # Status label to the left of the pill.
+    status = 'On' if reduced_motion else 'Off'
+    status_col = MENU_TEXT if reduced_motion else MENU_TEXT_SUB
+    status_s = fonts.btn.render(status, True, status_col)
+    screen.blit(status_s, status_s.get_rect(midright=(motion_rect.x - 12, motion_rect.centery)))
 
     back_s = fonts.pick_s.render('\u2190 Back', True, MENU_TEXT_SUB)
     screen.blit(back_s, (18, 18))

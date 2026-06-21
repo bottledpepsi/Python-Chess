@@ -14,7 +14,7 @@ import pygame
 
 from chess_game import io as save_io
 from chess_game import layout, theme
-from chess_game.anim import ANIM_MS, ease_out
+from chess_game.anim import ANIM_MS, FLIP_MIN_SCALE, ease_out
 from chess_game.assets import load_images
 from chess_game.bot_worker import BotWorker
 from chess_game.engine.bot import ChessBot
@@ -52,9 +52,21 @@ class App:
         self.logger = configure_logging()
         pygame.init()
 
-        # Resizable + SCALED + vsync window (was a fixed-size set_mode).
+        prefs = save_io.read_preferences()
+        board_theme = prefs.get('board_theme') or 'white_green'
+        arrow_theme = prefs.get('arrow_theme') or 'blue'
+        reduced_motion = bool(prefs.get('reduced_motion', False))
+        self._fullscreen = bool(prefs.get('fullscreen', False))
+        if board_theme not in theme.BOARD_THEMES:
+            board_theme = 'white_green'
+        if arrow_theme not in theme.ARROW_THEMES:
+            arrow_theme = 'blue'
+
+        flags = pygame.SCALED
+        if self._fullscreen:
+            flags |= pygame.FULLSCREEN
         self.screen = pygame.display.set_mode(
-            (theme.WIN_W, theme.WIN_H), pygame.SCALED | pygame.RESIZABLE, vsync=1
+            (theme.WIN_W, theme.WIN_H), flags, vsync=1
         )
         pygame.display.set_caption('Python Chess')
         self.board_surf = pygame.Surface((theme.BOARD_PX, theme.BOARD_PX), pygame.SRCALPHA)
@@ -63,15 +75,6 @@ class App:
         self.fonts = theme.load_fonts()
         self.assets = load_images(resource_path)
         self.sounds = SoundManager(resource_path)
-
-        prefs = save_io.read_preferences()
-        board_theme = prefs.get('board_theme') or 'white_green'
-        arrow_theme = prefs.get('arrow_theme') or 'blue'
-        reduced_motion = bool(prefs.get('reduced_motion', False))
-        if board_theme not in theme.BOARD_THEMES:
-            board_theme = 'white_green'
-        if arrow_theme not in theme.ARROW_THEMES:
-            arrow_theme = 'blue'
 
         bot = ChessBot(max_depth=3, book_path=resource_path('data/book/gm2001.bin'))
         worker = BotWorker(bot)
@@ -86,6 +89,10 @@ class App:
         self.clock = pygame.time.Clock()
 
         # Transient per-screen UI rects (not part of Game; rebuilt every frame).
+        self.opponent_rects: dict = {}
+        self.opponent_back: pygame.Rect | None = None
+        self.opponent_focus = FocusGroup([])
+
         self.picker_rects: dict = {}
         self.picker_back: pygame.Rect | None = None
         self.picker_focus = FocusGroup([])
@@ -160,6 +167,10 @@ class App:
             self.game.bot_level = save_data.level
             self.diff_level = save_data.level
         else:
+            # PvP auto-flip: orient the board so the player whose turn it is
+            # sits at the bottom. White to move = not flipped; Black to move
+            # = flipped. The turn is determined after replaying the moves
+            # below, so set a placeholder here and correct it afterwards.
             self.game.board_flipped = False
         self.game.state = mode
         self.start_game()
@@ -167,6 +178,9 @@ class App:
         for move in save_data.moves:
             if move in self.game.adapter.board.legal_moves:
                 self.game.adapter.apply_move(move)
+        if mode == GameState.PVP and not self.game.adapter.is_game_over:
+            # Orient for the side to move (Black to move = flipped).
+            self.game.board_flipped = (self.game.adapter.turn == 'black')
         if mode == GameState.BOT and not self.game.adapter.is_game_over:
             if self.game.adapter.turn != self.game.player_color:
                 self.launch_bot_move()
@@ -238,11 +252,126 @@ class App:
                     self.write_save()
                     if g.state == GameState.BOT and not g.adapter.promotion_pending:
                         self.launch_bot_move()
+                    elif g.state == GameState.PVP and not g.adapter.promotion_pending and not is_over:
+                        # Queue a board flip for when the slide animation
+                        # finishes so the next player sits at the bottom.
+                        g.pending_pvp_flip = True
                 # result == 'promotion' is also valid here: the promotion
                 # overlay will be drawn next frame and the user picks a
                 # piece via the existing keyboard / click flow.
         # Either way, the drag is finished.
         self._reset_drag()
+
+    def _maybe_arm_pvp_flip(self, now_ms: int) -> None:
+        """If a PvP auto-flip is pending and the move-slide animation has
+        finished, arm a board-flip animation.
+
+        The target orientation is computed from the CURRENT turn (Black to
+        move = flipped). Using an absolute target — not a relative toggle —
+        ensures the board is ALWAYS in the correct orientation for the side
+        to move, even if the player makes rapid moves that queue up multiple
+        flips.
+
+        If a flip is already in-flight when a new one needs to arm (rapid
+        moves), we cancel the old flip and arm a fresh one with the correct
+        target. The old flip's partial animation is discarded — correctness
+        of the final orientation takes priority over animation smoothness.
+        """
+        g = self.game
+        if not g.pending_pvp_flip:
+            return
+        # Wait until the move slide has finished so the piece lands before
+        # the board starts rotating.
+        if g.anim is not None and g.anim.is_animating(now_ms):
+            return
+        # If a previous flip is still in-flight, cancel it and arm a fresh
+        # one with the correct target. The old flip's midpoint swap may or
+        # may not have fired — it doesn't matter, because the new flip will
+        # SET the board to the correct absolute orientation at its midpoint
+        # (and at completion as a safety net).
+        if g.flip is not None and g.flip.is_active(now_ms):
+            g.flip = None
+            g.flip_swapped = False
+        g.pending_pvp_flip = False
+        # Absolute target: Black to move → board flipped so Black sits at
+        # the bottom. This is computed at flip-arm time from the live turn,
+        # so it's always correct regardless of how many flips queued up.
+        assert g.adapter is not None
+        target_flipped = (g.adapter.turn == 'black')
+        g.start_flip(now_ms, target_flipped)
+
+    def _enforce_pvp_orientation(self, now_ms: int) -> None:
+        """Safety net: if no flip is in-flight or pending and no move slide
+        is animating in PvP mode, force the board orientation to match the
+        current turn.
+
+        This catches any edge case where rapid moves left the board in the
+        wrong orientation — the player sees a one-frame snap to the correct
+        view rather than a stale wrong view. Without this, a race between
+        the flip animation and rapid move input could theoretically leave
+        the board showing the wrong player at the bottom.
+        """
+        g = self.game
+        if g.state != GameState.PVP or g.adapter is None:
+            return
+        # Don't interfere while a flip is in-flight or pending — those will
+        # set the correct orientation themselves.
+        if g.flip is not None and g.flip.is_active(now_ms):
+            return
+        if g.pending_pvp_flip:
+            return
+        # Don't interfere while a move slide is animating — the flip will
+        # arm after it finishes.
+        if g.anim is not None and g.anim.is_animating(now_ms):
+            return
+        # Don't interfere during review mode or game-over.
+        if g.review.active or g.game_over:
+            return
+        correct = (g.adapter.turn == 'black')
+        if g.board_flipped != correct:
+            g.board_flipped = correct
+
+    # ── Fullscreen toggle ──────────────────────────────────────────────────
+
+    def _toggle_fullscreen(self) -> None:
+        """Toggle between windowed and fullscreen via F11.
+
+        Uses pygame.display.toggle_fullscreen() which flips the mode
+        in-place without recreating the display surface — no renderer
+        teardown, no flashing. Falls back to set_mode with the new flags
+        if the in-place toggle fails (rare).
+        """
+        self._fullscreen = not self._fullscreen
+        try:
+            result = pygame.display.toggle_fullscreen()
+            if result == 1:
+                self._persist_window_prefs()
+                return
+        except pygame.error:
+            pass
+
+        # Fallback: recreate the display with the new flags. We must
+        # quit/init the display to avoid the "failed to create renderer"
+        # error on Windows when reusing SCALED.
+        flags = pygame.SCALED
+        if self._fullscreen:
+            flags |= pygame.FULLSCREEN
+        pygame.display.quit()
+        pygame.display.init()
+        self.screen = pygame.display.set_mode(
+            (theme.WIN_W, theme.WIN_H), flags, vsync=1
+        )
+        pygame.display.set_caption('Python Chess')
+        # Re-convert piece images to the new display's pixel format.
+        self.assets = load_images(resource_path)
+        self.game.piece_imgs = self.assets.piece_imgs
+        self._persist_window_prefs()
+
+    def _persist_window_prefs(self) -> None:
+        """Save the fullscreen state to preferences."""
+        g = self.game
+        save_io.write_preferences(g.board_theme, g.arrow_theme, g.reduced_motion,
+                                  self._fullscreen)
 
     # ── Bootstrap entry point ───────────────────────────────────────────────
 
@@ -276,6 +405,18 @@ class App:
             self._handle_event(event, mx, my)
 
         self._apply_bot_move()
+        # Arm any pending board flip once the move slide has finished, then
+        # advance any in-flight flip animation. The board rotates between
+        # turns so each player sits at the bottom on their move.
+        now = pygame.time.get_ticks()
+        self._maybe_arm_pvp_flip(now)
+        self.game.update_flip(now)
+        # Final safety net: if no flip is in-flight or pending and no move
+        # slide is animating in PvP mode, force the board orientation to
+        # match the current turn. This catches any edge case where rapid
+        # moves left the board in the wrong orientation — the player will
+        # see a one-frame snap to the correct view rather than a stale view.
+        self._enforce_pvp_orientation(now)
         self._render(dt)
         pygame.display.flip()
 
@@ -289,6 +430,12 @@ class App:
             self.game.bot_worker.join(timeout=2.0)
             pygame.quit()
             sys.exit()
+
+        # F11 toggles fullscreen at any time, regardless of what screen or
+        # popup is active.
+        if event.type == pygame.KEYDOWN and event.key == pygame.K_F11:
+            self._toggle_fullscreen()
+            return
 
         # Clear arrows only on a click that lands on the board itself,
         # not on every left click (which used to also swallow modal clicks).
@@ -334,6 +481,8 @@ class App:
 
         if g.state == GameState.MENU:
             self._handle_menu_event(event, mx, my)
+        elif g.state == GameState.OPPONENT_PICK:
+            self._handle_opponent_pick_event(event, mx, my)
         elif g.state == GameState.COLOR_PICK:
             self._handle_color_pick_event(event, mx, my)
         elif g.state == GameState.DIFFICULTY:
@@ -348,6 +497,7 @@ class App:
         or None for screens with no focusable widgets (e.g. PVP/BOT board)."""
         return {
             GameState.MENU: self.menu_focus,
+            GameState.OPPONENT_PICK: self.opponent_focus,
             GameState.COLOR_PICK: self.picker_focus,
             GameState.DIFFICULTY: self.diff_focus,
             GameState.PREFERENCES: self.pref_focus,
@@ -365,9 +515,13 @@ class App:
         if g.main_menu_overlay:
             g.main_menu_overlay = False
             return True
+        if g.state == GameState.OPPONENT_PICK:
+            self.opponent_focus.clear()
+            g.state = GameState.MENU
+            return True
         if g.state == GameState.COLOR_PICK:
             self.picker_focus.clear()
-            g.state = GameState.MENU
+            g.state = GameState.OPPONENT_PICK
             return True
         if g.state == GameState.DIFFICULTY:
             self.diff_focus.clear()
@@ -437,7 +591,45 @@ class App:
 
     def _handle_menu_event(self, event, mx, my) -> None:
         g = self.game
+        # Button 0: Local Play → opponent picker (player vs bot choice happens there)
         if self.menu_buttons[0].clicked(event) or self.menu_buttons[0].activated_by_key(event):
+            g.state = GameState.OPPONENT_PICK
+        # Button 1: Online Play — disabled (Coming soon). Button.clicked /
+        # activated_by_key already return False for disabled buttons, so this
+        # branch is effectively unreachable, but kept for clarity.
+        elif self.menu_buttons[1].clicked(event) or self.menu_buttons[1].activated_by_key(event):
+            pass
+        # Button 2: Preferences
+        elif self.menu_buttons[2].clicked(event) or self.menu_buttons[2].activated_by_key(event):
+            g.state = GameState.PREFERENCES
+
+    def _handle_opponent_pick_event(self, event, mx, my) -> None:
+        """Handle the 'Select Opponent' screen (Player vs Bot).
+
+        Choosing 'player' goes straight to a PvP game (checking for an
+        existing PvP save first). Choosing 'bot' goes to the color picker
+        (which then leads to the difficulty screen).
+        """
+        g = self.game
+        activated_key = None
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            if self.opponent_back and self.opponent_back.collidepoint(mx, my):
+                activated_key = 'back'
+            else:
+                for key, rect in self.opponent_rects.items():
+                    if rect.collidepoint(mx, my):
+                        activated_key = key
+                        break
+        else:
+            for focusable in self.opponent_focus.widgets:
+                if focusable.activated_by_key(event):
+                    activated_key = focusable.key
+                    break
+
+        if activated_key == 'back':
+            self.opponent_focus.clear()
+            g.state = GameState.MENU
+        elif activated_key == 'player':
             save = self.safe_read_save('pvp')
             if save:
                 g.pending_mode = GameState.PVP
@@ -447,7 +639,7 @@ class App:
                 g.board_flipped = False
                 g.state = GameState.PVP
                 self.start_game()
-        elif self.menu_buttons[1].clicked(event) or self.menu_buttons[1].activated_by_key(event):
+        elif activated_key == 'bot':
             save = self.safe_read_save('bot')
             if save:
                 g.pending_mode = GameState.BOT
@@ -455,8 +647,6 @@ class App:
                 g.continue_new_overlay = True
             elif self.pending_corrupt_error is None:
                 g.state = GameState.COLOR_PICK
-        elif self.menu_buttons[2].clicked(event) or self.menu_buttons[2].activated_by_key(event):
-            g.state = GameState.PREFERENCES
 
     def _handle_color_pick_event(self, event, mx, my) -> None:
         g = self.game
@@ -477,7 +667,7 @@ class App:
 
         if activated_key == 'back':
             self.picker_focus.clear()
-            g.state = GameState.MENU
+            g.state = GameState.OPPONENT_PICK
         elif activated_key in ('white', 'black'):
             g.player_color = activated_key
             g.board_flipped = (activated_key == 'black')
@@ -572,7 +762,8 @@ class App:
                 g.winner_alpha = 255
             changed = True
         if changed:
-            save_io.write_preferences(g.board_theme, g.arrow_theme, g.reduced_motion)
+            save_io.write_preferences(g.board_theme, g.arrow_theme, g.reduced_motion,
+                                      self._fullscreen)
 
     def _complete_promotion(self, piece_type) -> None:
         """Complete a pending promotion with the given piece type, whether
@@ -588,11 +779,19 @@ class App:
         self.write_save()
         if g.state == GameState.BOT and g.adapter.turn != g.player_color:
             self.launch_bot_move()
+        elif g.state == GameState.PVP and not g.adapter.is_game_over:
+            g.pending_pvp_flip = True
 
     def _handle_game_event(self, event, mx, my) -> None:
         g = self.game
         assert g.adapter is not None  # guaranteed by g.state in (PVP, BOT)
-        is_animating = g.anim is not None and g.anim.is_animating(pygame.time.get_ticks())
+        now_ms = pygame.time.get_ticks()
+        is_animating = g.anim is not None and g.anim.is_animating(now_ms)
+        # While the board-flip animation is in-flight, all piece interaction
+        # is blocked — the board is visually rotating and clicks would land
+        # on the wrong squares. The menu button, history panel, and overlays
+        # still work so the user can open the menu mid-flip if needed.
+        flip_in_progress = g.flip is not None and g.flip.is_active(now_ms)
 
         if event.type == pygame.KEYDOWN:
             if event.key in (pygame.K_LEFT, pygame.K_RIGHT):
@@ -628,7 +827,12 @@ class App:
                   and self.menu_from_gameover_rect.collidepoint(mx, my)):
                 g.review.reset()
                 g.state = GameState.MENU
-            elif g.review.active or is_animating or g.game_over:
+            elif g.review.active or is_animating or g.game_over or flip_in_progress:
+                # While the board-flip animation is in-flight, block all piece
+                # interaction — the board is rotating and clicks would land on
+                # the wrong squares. This also prevents the rapid-move race
+                # condition at the input level (no new moves can be queued
+                # while a flip is playing).
                 pass
             elif g.adapter.promotion_pending:
                 for rect, pt in g.promo_rects:
@@ -658,6 +862,11 @@ class App:
                             self.write_save()
                             if g.state == GameState.BOT and not g.adapter.promotion_pending:
                                 self.launch_bot_move()
+                            elif g.state == GameState.PVP and not g.adapter.promotion_pending and not is_over:
+                                # Queue a board flip for when the slide
+                                # animation finishes so the next player
+                                # sits at the bottom on their turn.
+                                g.pending_pvp_flip = True
                         elif result == 'selected':
                             # A piece was selected — arm a potential drag so
                             # the user can either release (pure click, piece
@@ -683,14 +892,20 @@ class App:
         elif event.type == pygame.MOUSEMOTION:
             # Live cursor tracking for an armed or active drag. Below the
             # threshold the piece stays on its square (pure-click path).
-            self._update_drag_motion(mx, my)
+            # Suppress during a board flip — no drag can be in progress
+            # (mousedown was blocked), but this is defensive.
+            if not flip_in_progress:
+                self._update_drag_motion(mx, my)
 
         elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
             # Release after a drag: attempt the move if the cursor is over a
             # valid target, otherwise cancel and leave the piece selected.
             # If the press never crossed the drag threshold, drag_active is
             # False and this is a no-op (the mousedown already did the work).
-            self._complete_drag(mx, my)
+            # Block during a board flip — the piece shouldn't move while
+            # the board is rotating.
+            if not flip_in_progress:
+                self._complete_drag(mx, my)
 
     # ── Bot move application ────────────────────────────────────────────────
 
@@ -718,6 +933,19 @@ class App:
     _history_ply_rects: list = []
     _live_btn_rect: pygame.Rect | None = None
 
+    def _popup_active(self) -> bool:
+        """True if any modal popup/overlay is currently on screen.
+
+        When this returns True, hover highlighting on the base screen layer
+        is suppressed (the mouse position is reported as off-screen to the
+        draw functions) so elements behind the popup don't light up as the
+        cursor moves over them.
+        """
+        g = self.game
+        return (self.pending_corrupt_error is not None
+                or g.continue_new_overlay
+                or g.main_menu_overlay)
+
     def _draw_focus_ring(self, focus_group: FocusGroup) -> None:
         """Draw a visible focus ring around the currently focused widget for
         screens that draw their own custom rects (not Button.draw())."""
@@ -726,13 +954,36 @@ class App:
             pygame.draw.rect(self.screen, FOCUS_RING, focused.rect, 3, border_radius=8)
 
     def _render(self, dt: int) -> None:
+        # When a popup is active, suppress hover highlighting on the base
+        # screen by temporarily making the mouse position read as off-screen.
+        # The draw functions all call pygame.mouse.get_pos() for hover
+        # detection, so this cleanly disables hover without changing any
+        # signatures. The real mouse position is restored before drawing
+        # the popup layer itself (so the popup's own buttons still hover).
+        popup_before = self._popup_active()
+        real_get_pos = pygame.mouse.get_pos
+        if popup_before:
+            pygame.mouse.get_pos = lambda: (-9999, -9999)
+        try:
+            self._render_base(dt)
+        finally:
+            pygame.mouse.get_pos = real_get_pos
+        # Now draw the popup layer (if any) with the real mouse position.
+        self._render_popups(dt)
+
+    def _render_base(self, dt: int) -> None:
         g = self.game
         if g.state == GameState.MENU:
             render_menus.draw_menu(self.screen, self.menu_buttons, self.fonts)
-            if g.continue_new_overlay:
-                self.overlay_cont_btn, self.overlay_new_btn = render_overlays.draw_continue_new_overlay(
-                    self.screen, theme.WIN_W, theme.WIN_H, self.fonts
-                )
+        elif g.state == GameState.OPPONENT_PICK:
+            self.opponent_rects, self.opponent_back = render_menus.draw_opponent_picker(
+                self.screen, self.fonts, self.assets.king_imgs
+            )
+            opponent_focusables = [FocusableRect(self.opponent_back, 'back')] + [
+                FocusableRect(rect, key) for key, rect in self.opponent_rects.items()
+            ]
+            self.opponent_focus.rebuild(opponent_focusables)
+            self._draw_focus_ring(self.opponent_focus)
         elif g.state == GameState.COLOR_PICK:
             self.picker_rects, self.picker_back = render_menus.draw_color_picker(
                 self.screen, self.fonts, self.assets.king_imgs
@@ -770,6 +1021,19 @@ class App:
         elif g.state in (GameState.PVP, GameState.BOT):
             self._render_game(dt)
 
+    def _render_popups(self, dt: int) -> None:
+        """Draw modal popups/overlays on top of the base screen. Called
+        after _render_base with the real mouse position restored, so the
+        popup's own buttons get hover highlighting."""
+        g = self.game
+        if g.continue_new_overlay and g.state in (GameState.MENU, GameState.OPPONENT_PICK):
+            self.overlay_cont_btn, self.overlay_new_btn = render_overlays.draw_continue_new_overlay(
+                self.screen, theme.WIN_W, theme.WIN_H, self.fonts
+            )
+        if g.main_menu_overlay and g.state in (GameState.PVP, GameState.BOT):
+            self.overlay_save_btn, self.overlay_quit_btn = render_menus.draw_main_menu_overlay(
+                self.screen, self.fonts, theme.PANEL_X
+            )
         if self.pending_corrupt_error is not None:
             render_overlays.draw_error_modal(
                 self.screen, theme.WIN_W, theme.WIN_H, self.pending_corrupt_error, self.fonts
@@ -819,19 +1083,46 @@ class App:
             self.screen, theme.PANEL_X, theme.WIN_H - theme.TRAY_H, g.adapter, g.board_flipped,
             self.fonts, self.assets.tray_imgs, top_thinking, bottom_thinking, g.think_dots,
         )
-        self.screen.blit(self.board_surf, (theme.BOARD_X, theme.BOARD_Y))
-        if g.anim is not None and g.anim.is_animating(now_ms):
-            self._draw_anim_items(g.anim, now_ms)
-        # While a drag is in flight, draw the lifted piece at the cursor on
-        # top of the board (and any in-flight slide animation) but below the
-        # labels, arrows, and any modal overlays that follow.
-        if self.drag_active and self.drag_sq is not None:
-            piece = board.piece_at(self.drag_sq)
-            if piece is not None:
-                img = g.piece_imgs.get((piece.piece_type, piece.color))
-                if img is not None:
-                    rect = img.get_rect(center=self.drag_pos)
-                    self.screen.blit(img, rect)
+        # If a board-flip animation is in flight, scale the board horizontally
+        # (a gentle dip, not a full squash) and lay a subtle darkening overlay
+        # on top so the orientation swap reads as a calm transition rather
+        # than a violent crush.
+        flip = g.flip
+        if flip is not None and flip.is_active(now_ms):
+            scale_x = flip.progress(now_ms)
+            board_w = self.board_surf.get_width()
+            board_h = self.board_surf.get_height()
+            new_w = max(1, int(board_w * scale_x))
+            squashed = pygame.transform.smoothscale(self.board_surf, (new_w, board_h))
+            # Centre the scaled board so it appears to breathe in from both edges.
+            offset_x = (board_w - new_w) // 2
+            self.screen.blit(squashed, (theme.BOARD_X + offset_x, theme.BOARD_Y))
+            # Subtle darkening overlay during the flip — peaks at the
+            # midpoint (when the orientation swaps) and fades out smoothly.
+            # This sells the "card flip" feel without the nausea of a full
+            # squash to zero width.
+            darkness = (1.0 - (scale_x - FLIP_MIN_SCALE) / (1.0 - FLIP_MIN_SCALE)) * 90
+            if darkness > 1:
+                veil = pygame.Surface((new_w, board_h), pygame.SRCALPHA)
+                veil.fill((0, 0, 0, int(min(90, darkness))))
+                self.screen.blit(veil, (theme.BOARD_X + offset_x, theme.BOARD_Y))
+            # Suppress the move-slide animation and drag-piece overlay during
+            # the flip — their absolute screen coordinates are in the pre-flip
+            # orientation and would visually drift as the board scales.
+        else:
+            self.screen.blit(self.board_surf, (theme.BOARD_X, theme.BOARD_Y))
+            if g.anim is not None and g.anim.is_animating(now_ms):
+                self._draw_anim_items(g.anim, now_ms)
+            # While a drag is in flight, draw the lifted piece at the cursor on
+            # top of the board (and any in-flight slide animation) but below the
+            # labels, arrows, and any modal overlays that follow.
+            if self.drag_active and self.drag_sq is not None:
+                piece = board.piece_at(self.drag_sq)
+                if piece is not None:
+                    img = g.piece_imgs.get((piece.piece_type, piece.color))
+                    if img is not None:
+                        rect = img.get_rect(center=self.drag_pos)
+                        self.screen.blit(img, rect)
         render_board.draw_labels(self.screen, g.board_flipped, self.fonts)
         render_arrows.draw_board_arrow_overlay(self.screen, g.all_arrows, g.arrow_theme, g.board_flipped)
 
@@ -879,11 +1170,6 @@ class App:
                     self.screen, theme.WIN_W, theme.WIN_H, theme.PANEL_X,
                     g.winner_result, g.winner_alpha, self.fonts,
                 )
-
-        if g.main_menu_overlay:
-            self.overlay_save_btn, self.overlay_quit_btn = render_menus.draw_main_menu_overlay(
-                self.screen, self.fonts, theme.PANEL_X
-            )
 
 
 def bootstrap() -> App:

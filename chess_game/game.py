@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 import chess
 
 from chess_game.adapter import ChessAdapter
-from chess_game.anim import AnimationState, ReviewState
+from chess_game.anim import AnimationState, FlipState, ReviewState
 from chess_game.bot_worker import BotWorker
 from chess_game.engine.bot import ChessBot
 from chess_game.state import GameState
@@ -51,6 +51,19 @@ class Game:
     arrow_theme: str = "blue"
     reduced_motion: bool = False
 
+    # When set, a board-flip animation is in flight. The actual
+    # `board_flipped` toggle happens at the animation midpoint (when the
+    # board is squashed to zero width). Set by `start_flip()` after a PvP
+    # move's slide animation completes.
+    flip: FlipState | None = None
+    # Internal latch: ensures the orientation swap inside update_flip fires
+    # exactly once per flip animation, not every frame of the second half.
+    flip_swapped: bool = False
+    # Set by the click/drag handlers after a PvP move is applied. The main
+    # loop's _maybe_arm_pvp_flip() converts this into a FlipState once the
+    # move-slide animation has finished.
+    pending_pvp_flip: bool = False
+
     anim: AnimationState | None = None
 
     # UI overlay flags
@@ -80,6 +93,9 @@ class Game:
         self.promo_rects = []
         self.bot_epoch = None
         self.anim = None
+        self.flip = None
+        self.flip_swapped = False
+        self.pending_pvp_flip = False
         self.review.reset()
         self.panel_scroll = 0
 
@@ -122,6 +138,45 @@ class Game:
             sup = {item.suppress_sq for item in self.anim.items if item.suppress_sq is not None}
             return sup if sup else None
         return None
+
+    def start_flip(self, now_ms: int, target_flipped: bool) -> None:
+        """Arm a board-flip animation. The actual `board_flipped` SET is
+        applied at the animation midpoint (inside update_flip), so callers
+        should NOT toggle `board_flipped` themselves.
+
+        `target_flipped` is the ABSOLUTE orientation the board should have
+        after the flip. Using an absolute target (not a relative toggle)
+        prevents race conditions where rapid moves could leave the board
+        in the wrong orientation.
+
+        If `reduced_motion` is enabled, the flip is applied instantly with
+        no animation.
+        """
+        if self.reduced_motion:
+            self.board_flipped = target_flipped
+            return
+        self.flip = FlipState(start_ms=now_ms, target_flipped=target_flipped)
+
+    def update_flip(self, now_ms: int) -> None:
+        """Advance any in-flight board-flip animation. SETS `board_flipped`
+        to the flip's target at the midpoint and clears `self.flip` when the
+        animation completes."""
+        if self.flip is None:
+            return
+        if self.flip.is_active(now_ms):
+            # Set the absolute target orientation at the midpoint (when the
+            # board is at minimum width, hiding the orientation change).
+            if self.flip.should_swap_orientation(now_ms) and not self.flip_swapped:
+                self.board_flipped = self.flip.target_flipped
+                self.flip_swapped = True
+            return
+        # Animation finished — ensure the orientation was set to the target
+        # (in case no update_flip frame landed during the second half) and
+        # clean up. This is the safety net: no matter what happened during
+        # the animation, the final orientation is always the correct one.
+        self.board_flipped = self.flip.target_flipped
+        self.flip = None
+        self.flip_swapped = False
 
     def start_anim(self, from_sq: int, to_sq: int, img, start_pos: tuple[int, int] | None = None) -> None:
         """Start (or extend) the current animation batch.

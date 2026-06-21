@@ -99,8 +99,22 @@ def draw_board(
 
 
 def draw_labels(screen, board_flipped, fonts):
-    """Draw rank (1-8) and file (a-h) labels around the board, pure."""
-    from chess_game.theme import BOARD_X, BOARD_Y, LABEL_COL
+    """Draw rank (1-8) and file (a-h) labels around the board, pure.
+
+    The label margin areas (left of the board and below it) are NOT covered
+    by the board surface blit, so stale labels from a previous orientation
+    would persist across a board flip. We clear just the label strips
+    (not the full TILE height below the board — that would overwrite the
+    bottom captured-piece tray).
+    """
+    from chess_game.theme import BG, BOARD_X, BOARD_Y, FILE_LABEL_H, LABEL_COL, TILE
+
+    # Clear the left margin (where rank labels live) and the bottom margin
+    # (where file labels live) so stale labels from the previous orientation
+    # don't bleed through after a board flip. The bottom clear is bounded
+    # to FILE_LABEL_H so it doesn't overwrite the tray below the board.
+    screen.fill(BG, (0, BOARD_Y, BOARD_X, BOARD_PX))
+    screen.fill(BG, (BOARD_X, BOARD_Y + BOARD_PX, BOARD_PX, FILE_LABEL_H))
 
     files = 'hgfedcba' if board_flipped else 'abcdefgh'
     for y in range(8):

@@ -43,6 +43,9 @@ SHADOW = (10, 10, 10)
 LABEL_COL = (167, 167, 167)          # was (120,120,120) ~3.9:1 on BG -> ~5.6:1
 MENU_BG = (18, 18, 18)
 MENU_ACCENT = (118, 150, 86)
+# Brighter version of MENU_ACCENT for selected-state outlines on preferences
+# swatches — the muted accent didn't pop enough against the dark background.
+MENU_ACCENT_BRIGHT = (170, 220, 120)
 MENU_BTN_NORM = (38, 38, 38)
 MENU_BTN_HOV = (55, 55, 55)
 MENU_BTN_DIS = (30, 30, 30)

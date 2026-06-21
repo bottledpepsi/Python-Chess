@@ -17,7 +17,7 @@ import chess
 import pygame
 import pytest
 
-from chess_game.app import App, DRAG_THRESHOLD_PX
+from chess_game.app import DRAG_THRESHOLD_PX, App
 from chess_game.layout import sq_to_screen
 from chess_game.state import GameState
 

@@ -56,24 +56,52 @@ def _square_center(sq, board_flipped=False):
 
 # ── MENU ─────────────────────────────────────────────────────────────────────
 
-def test_menu_pvp_click_starts_pvp_game(app):
+def test_menu_local_play_click_goes_to_opponent_pick(app):
     assert app.game.state == GameState.MENU
     rect = app.menu_buttons[0].rect
     _click(app, rect.centerx, rect.centery)
-    assert app.game.state == GameState.PVP
-    assert app.game.adapter is not None
+    assert app.game.state == GameState.OPPONENT_PICK
 
 
-def test_menu_bot_click_goes_to_color_pick(app):
+def test_menu_online_play_button_is_disabled(app):
+    """Online Play is a disabled button — clicking it must NOT change state."""
+    assert app.menu_buttons[1].disabled is True
     rect = app.menu_buttons[1].rect
     _click(app, rect.centerx, rect.centery)
-    assert app.game.state == GameState.COLOR_PICK
+    assert app.game.state == GameState.MENU
 
 
 def test_menu_preferences_click_goes_to_preferences(app):
     rect = app.menu_buttons[2].rect
     _click(app, rect.centerx, rect.centery)
     assert app.game.state == GameState.PREFERENCES
+
+
+# ── OPPONENT_PICK ────────────────────────────────────────────────────────────
+
+def test_opponent_pick_player_starts_pvp_game(app):
+    app.game.state = GameState.OPPONENT_PICK
+    app._render(16)
+    rect = app.opponent_rects['player']
+    _click(app, rect.centerx, rect.centery)
+    assert app.game.state == GameState.PVP
+    assert app.game.adapter is not None
+
+
+def test_opponent_pick_bot_goes_to_color_pick(app):
+    app.game.state = GameState.OPPONENT_PICK
+    app._render(16)
+    rect = app.opponent_rects['bot']
+    _click(app, rect.centerx, rect.centery)
+    assert app.game.state == GameState.COLOR_PICK
+
+
+def test_opponent_pick_back_returns_to_menu(app):
+    app.game.state = GameState.OPPONENT_PICK
+    app._render(16)
+    # Back button is the top-left "← Back" rect.
+    _click(app, app.opponent_back.centerx, app.opponent_back.centery)
+    assert app.game.state == GameState.MENU
 
 
 # ── COLOR_PICK ───────────────────────────────────────────────────────────────
@@ -95,6 +123,14 @@ def test_color_pick_black_flips_board(app):
     _click(app, rect.centerx, rect.centery)
     assert app.game.player_color == 'black'
     assert app.game.board_flipped is True
+
+
+def test_color_pick_back_returns_to_opponent_pick(app):
+    """Esc from color pick should now return to OPPONENT_PICK, not MENU."""
+    app.game.state = GameState.COLOR_PICK
+    app._render(16)
+    _key(app, pygame.K_ESCAPE)
+    assert app.game.state == GameState.OPPONENT_PICK
 
 
 # ── DIFFICULTY ───────────────────────────────────────────────────────────────
@@ -199,8 +235,15 @@ def test_move_animation_actually_paints_a_sliding_sprite(app):
 
 # ── Esc navigation ───────────────────────────────────────────────────────────
 
-def test_esc_backs_out_of_color_pick_to_menu(app):
+def test_esc_backs_out_of_color_pick_to_opponent_pick(app):
     app.game.state = GameState.COLOR_PICK
+    app._render(16)
+    _key(app, pygame.K_ESCAPE)
+    assert app.game.state == GameState.OPPONENT_PICK
+
+
+def test_esc_backs_out_of_opponent_pick_to_menu(app):
+    app.game.state = GameState.OPPONENT_PICK
     app._render(16)
     _key(app, pygame.K_ESCAPE)
     assert app.game.state == GameState.MENU
@@ -274,9 +317,9 @@ def test_tab_moves_focus_to_next_menu_button(app):
 
 
 def test_enter_activates_focused_menu_button(app):
-    _key(app, pygame.K_TAB)  # focus button 0 (PvP)
+    _key(app, pygame.K_TAB)  # focus button 0 (Local Play)
     _key(app, pygame.K_RETURN)
-    assert app.game.state == GameState.PVP
+    assert app.game.state == GameState.OPPONENT_PICK
 
 
 def test_shift_tab_cycles_backwards(app):

@@ -6,6 +6,7 @@ import enum
 
 class GameState(enum.Enum):
     MENU = "menu"
+    OPPONENT_PICK = "opponent_pick"
     COLOR_PICK = "color_pick"
     DIFFICULTY = "difficulty"
     PREFERENCES = "preferences"
@@ -15,8 +16,9 @@ class GameState(enum.Enum):
 
 # Allowed transitions: from_state -> set of to_states it may move to.
 _ALLOWED: dict[GameState, set[GameState]] = {
-    GameState.MENU: {GameState.COLOR_PICK, GameState.PVP, GameState.PREFERENCES},
-    GameState.COLOR_PICK: {GameState.MENU, GameState.DIFFICULTY},
+    GameState.MENU: {GameState.OPPONENT_PICK, GameState.PREFERENCES},
+    GameState.OPPONENT_PICK: {GameState.MENU, GameState.PVP, GameState.COLOR_PICK},
+    GameState.COLOR_PICK: {GameState.MENU, GameState.OPPONENT_PICK, GameState.DIFFICULTY},
     GameState.DIFFICULTY: {GameState.COLOR_PICK, GameState.BOT},
     GameState.PREFERENCES: {GameState.MENU},
     GameState.PVP: {GameState.MENU},
