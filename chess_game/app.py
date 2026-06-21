@@ -37,6 +37,12 @@ def resource_path(relative: str) -> str:
     return os.path.join(base, relative)
 
 
+# Minimum mouse movement (in pixels) before a mousedown is promoted to a drag.
+# Below this, a press+release is treated as a pure click (preserving the
+# existing click-to-select / click-to-move behaviour unchanged).
+DRAG_THRESHOLD_PX = 5
+
+
 class App:
     """Owns everything bootstrap() creates: screen, fonts, assets, sounds,
     the Game instance, and per-screen UI state that doesn't belong on Game
@@ -106,6 +112,19 @@ class App:
 
         self.pending_corrupt_error: str | None = None
 
+        # Drag-and-drop state for moving pieces by dragging. `drag_pending`
+        # is set on mousedown over a selectable piece; it is promoted to
+        # `drag_active` once the cursor moves past DRAG_THRESHOLD_PX, at
+        # which point the piece is lifted off the board and drawn at the
+        # cursor until mouseup. Click-to-select / click-to-move is fully
+        # preserved: a press+release below the threshold behaves exactly
+        # as before.
+        self.drag_pending: bool = False
+        self.drag_active: bool = False
+        self.drag_sq: int | None = None
+        self.drag_pos: tuple[int, int] = (0, 0)
+        self.drag_start_pos: tuple[int, int] = (0, 0)
+
     # ── Lifecycle helpers ───────────────────────────────────────────────────
 
     def start_game(self) -> None:
@@ -153,6 +172,78 @@ class App:
                 self.launch_bot_move()
         self.write_save()
 
+    # ── Drag-and-drop helpers ──────────────────────────────────────────────
+
+    def _reset_drag(self) -> None:
+        """Clear all drag-and-drop tracking state."""
+        self.drag_pending = False
+        self.drag_active = False
+        self.drag_sq = None
+
+    def _start_drag(self, sq: int, mx: int, my: int) -> None:
+        """Begin tracking a potential drag originating from `sq`.
+
+        Called after a click selects a piece — the piece is not yet lifted
+        off the board; that only happens once the cursor moves past
+        DRAG_THRESHOLD_PX (see _update_drag_motion).
+        """
+        self.drag_pending = True
+        self.drag_active = False
+        self.drag_sq = sq
+        self.drag_pos = (mx, my)
+        self.drag_start_pos = (mx, my)
+
+    def _update_drag_motion(self, mx: int, my: int) -> None:
+        """Promote a pending drag to active once the cursor has moved past
+        the threshold, and keep the dragged piece's screen position current."""
+        if not self.drag_pending:
+            return
+        dx = mx - self.drag_start_pos[0]
+        dy = my - self.drag_start_pos[1]
+        if not self.drag_active and (dx * dx + dy * dy) >= (DRAG_THRESHOLD_PX * DRAG_THRESHOLD_PX):
+            self.drag_active = True
+        if self.drag_active:
+            self.drag_pos = (mx, my)
+
+    def _complete_drag(self, mx: int, my: int) -> None:
+        """On left-button release, if a drag is in flight, attempt to move
+        the dragged piece to the square under the cursor. The drag state is
+        always reset afterward.
+
+        Dropping on an invalid square or outside the board cancels the drag
+        and leaves the piece selected, so the user can click a target square
+        next (mirroring the forgiving behaviour of click-to-move).
+        """
+        g = self.game
+        if not self.drag_active or self.drag_sq is None or g.adapter is None:
+            self._reset_drag()
+            return
+
+        bx, by = mx - theme.BOARD_X, my - theme.BOARD_Y
+        if 0 <= bx < theme.BOARD_PX and 0 <= by < theme.BOARD_PX:
+            target_sq = layout.pixel_to_sq(bx, by, g.board_flipped)
+            if target_sq in g.adapter.valid_move_targets:
+                result = g.adapter.handle_click(target_sq)
+                if result in ('move', 'capture', 'en_passant'):
+                    piece = g.adapter.board.piece_at(g.adapter.anim_to)
+                    img = g.piece_imgs.get((piece.piece_type, piece.color)) if piece else None
+                    # Start the slide animation from the cursor's release
+                    # position rather than the origin square, so the piece
+                    # flows smoothly from where it was dropped to the
+                    # destination instead of snapping back first.
+                    g.start_anim(g.adapter.anim_from, g.adapter.anim_to, img, start_pos=(mx, my))
+                    is_check = g.adapter.check_square is not None
+                    is_over = g.adapter.is_game_over
+                    self.sounds.play_for_move_result(result, is_check=is_check, is_game_over=is_over)
+                    self.write_save()
+                    if g.state == GameState.BOT and not g.adapter.promotion_pending:
+                        self.launch_bot_move()
+                # result == 'promotion' is also valid here: the promotion
+                # overlay will be drawn next frame and the user picks a
+                # piece via the existing keyboard / click flow.
+        # Either way, the drag is finished.
+        self._reset_drag()
+
     # ── Bootstrap entry point ───────────────────────────────────────────────
 
     def run(self) -> None:
@@ -168,6 +259,13 @@ class App:
     def _frame(self) -> None:
         dt = self.clock.tick(60)
         mx, my = pygame.mouse.get_pos()
+
+        # Safety net: if a drag is armed or active but the left mouse button
+        # is no longer held, the mouseup was swallowed by an overlay or
+        # state transition. Clear the stale drag state so the next press
+        # starts cleanly and no piece is left "stuck" to the cursor.
+        if (self.drag_pending or self.drag_active) and not pygame.mouse.get_pressed()[0]:
+            self._reset_drag()
 
         self.game.think_timer += dt
         if self.game.think_timer >= 500:
@@ -284,6 +382,9 @@ class App:
                 exit_review(g)
                 return True
             g.main_menu_overlay = True
+            # Cancel any in-flight drag — the overlay will swallow the
+            # subsequent mouseup, so the drag would otherwise leak.
+            self._reset_drag()
             return True
         return False
 
@@ -508,6 +609,10 @@ class App:
                     self._complete_promotion(pt)
 
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            # A fresh press ends any previous drag cycle (e.g. a mouseup that
+            # was swallowed by an overlay). The state is re-armed below only
+            # if this press selects a piece.
+            self._reset_drag()
             if self.menu_btn_ingame_rect and self.menu_btn_ingame_rect.collidepoint(mx, my):
                 g.main_menu_overlay = True
             elif mx >= theme.PANEL_X:
@@ -553,6 +658,13 @@ class App:
                             self.write_save()
                             if g.state == GameState.BOT and not g.adapter.promotion_pending:
                                 self.launch_bot_move()
+                        elif result == 'selected':
+                            # A piece was selected — arm a potential drag so
+                            # the user can either release (pure click, piece
+                            # stays selected) or drag the piece to a target.
+                            self._start_drag(g.adapter.selected_square, mx, my)
+                        # 'deselected', 'promotion', and None leave the drag
+                        # state already reset by the _reset_drag() above.
 
         elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 3:
             bx, by = mx - theme.BOARD_X, my - theme.BOARD_Y
@@ -567,6 +679,18 @@ class App:
                     if end_sq != g.arrow_start_sq:
                         g.all_arrows.append((g.arrow_start_sq, end_sq))
                 g.arrow_start_sq = None
+
+        elif event.type == pygame.MOUSEMOTION:
+            # Live cursor tracking for an armed or active drag. Below the
+            # threshold the piece stays on its square (pure-click path).
+            self._update_drag_motion(mx, my)
+
+        elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+            # Release after a drag: attempt the move if the cursor is over a
+            # valid target, otherwise cancel and leave the piece selected.
+            # If the press never crossed the drag threshold, drag_active is
+            # False and this is a no-op (the mousedown already did the work).
+            self._complete_drag(mx, my)
 
     # ── Bot move application ────────────────────────────────────────────────
 
@@ -676,6 +800,12 @@ class App:
         # affects its pixels has actually changed, instead of every frame.
         board, check_sq, last_move, sel_sq, targets = g.resolve_board_view()
         suppress = g.animation_suppress_set(now_ms)
+        # While a drag is in flight, lift the dragged piece off its origin
+        # square so it isn't drawn twice (once statically on the board, and
+        # once at the cursor below). The selection highlight and valid-target
+        # indicators are independent of `suppress` and remain visible.
+        if self.drag_active and self.drag_sq is not None:
+            suppress = {self.drag_sq} if suppress is None else suppress | {self.drag_sq}
         render_board.draw_board(
             self.board_surf, board, g.piece_imgs, g.board_theme, g.board_flipped,
             check_sq, last_move, sel_sq, targets, suppress,
@@ -692,6 +822,16 @@ class App:
         self.screen.blit(self.board_surf, (theme.BOARD_X, theme.BOARD_Y))
         if g.anim is not None and g.anim.is_animating(now_ms):
             self._draw_anim_items(g.anim, now_ms)
+        # While a drag is in flight, draw the lifted piece at the cursor on
+        # top of the board (and any in-flight slide animation) but below the
+        # labels, arrows, and any modal overlays that follow.
+        if self.drag_active and self.drag_sq is not None:
+            piece = board.piece_at(self.drag_sq)
+            if piece is not None:
+                img = g.piece_imgs.get((piece.piece_type, piece.color))
+                if img is not None:
+                    rect = img.get_rect(center=self.drag_pos)
+                    self.screen.blit(img, rect)
         render_board.draw_labels(self.screen, g.board_flipped, self.fonts)
         render_arrows.draw_board_arrow_overlay(self.screen, g.all_arrows, g.arrow_theme, g.board_flipped)
 

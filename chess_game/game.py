@@ -123,7 +123,7 @@ class Game:
             return sup if sup else None
         return None
 
-    def start_anim(self, from_sq: int, to_sq: int, img) -> None:
+    def start_anim(self, from_sq: int, to_sq: int, img, start_pos: tuple[int, int] | None = None) -> None:
         """Start (or extend) the current animation batch.
 
         Matches the original's semantics: if an animation is already
@@ -132,6 +132,12 @@ class Game:
 
         When reduced_motion is enabled this is a no-op: pieces snap
         straight to their final position instead of sliding.
+
+        When `start_pos` is provided (absolute screen-pixel coordinates),
+        the animation begins from that point instead of the centre of
+        `from_sq`. This is used by the drag-and-drop flow so the piece
+        slides smoothly from where the cursor released it to the
+        destination square, rather than snapping back to its origin first.
         """
         if self.reduced_motion:
             return
@@ -141,7 +147,10 @@ class Game:
         from chess_game.anim import AnimationState, AnimItem
         from chess_game.layout import sq_to_screen
 
-        sx, sy = sq_to_screen(from_sq, self.board_flipped)
+        if start_pos is not None:
+            sx, sy = start_pos
+        else:
+            sx, sy = sq_to_screen(from_sq, self.board_flipped)
         ex, ey = sq_to_screen(to_sq, self.board_flipped)
         item = AnimItem(sx, sy, ex, ey, img, to_sq)
         now_ms = pygame.time.get_ticks()
