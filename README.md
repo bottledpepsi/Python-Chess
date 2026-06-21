@@ -20,7 +20,7 @@ A desktop chess game built with Python and pygame, powered by the `python-chess`
 - The bot thread is **cancellable**. Restart or quit mid-think and it stops within ~2 seconds
 
 **Board & UI**
-- **Drag-and-drop piece movement** — pick up a piece and drop it on a target square, with a 5px threshold that preserves the existing click-to-select / click-to-move flow
+- **Drag-and-drop piece movement** — pick up a piece and drop it on a target square
 - **Animated board flipping** in PvP mode — the board rotates between turns with a smooth squash-and-stretch animation so each player sits at the bottom on their move
 - Smooth piece animation for moves and review stepping, starting from the cursor release position when dragging
 - Move indicators (dots for empty squares, rings for captures)
@@ -55,7 +55,7 @@ A desktop chess game built with Python and pygame, powered by the `python-chess`
 **Accessibility**
 - Full keyboard navigation: `Tab`/`Shift+Tab` to move focus, `Enter`/`Space` to activate, `Esc` to back out
 - WCAG-AA-compliant text contrast across all UI
-- **F11 fullscreen toggle** with persistent state — the game remembers your fullscreen preference
+- F11 fullscreen toggle
 - Reduced-motion preference for piece animations, board-flip animation, and the game-over fade
 - Popup hover suppression — hover highlighting is disabled on elements behind modal overlays so they don't flicker as the cursor passes over them
 
@@ -64,7 +64,7 @@ A desktop chess game built with Python and pygame, powered by the `python-chess`
 ## Requirements
 
 - `python >= 3.10.0`
-- `pygame >= 2.5.0`
+- `pygame >= 2..0`
 - `chess >= 1.10.0`
 - `platformdirs >= 4.2`
 
