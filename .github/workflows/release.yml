@@ -58,7 +58,7 @@ jobs:
       - name: Build with PyInstaller (Linux)
         if: runner.os == 'Linux'
         run: |
-          PyInstaller --onefile --icon=icon.ico --add-data "data:data" --name "PythonChess" main.py
+          pyinstaller --onefile --add-data "data:data" --name "PythonChess" main.py
 
       - name: Install Pillow (macOS icon conversion)
         if: runner.os == 'macOS'
