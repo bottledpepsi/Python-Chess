@@ -206,6 +206,36 @@ A GitHub Actions workflow (`.github/workflows/ci.yml`) runs ruff + mypy + pytest
 
 ---
 
+
+### Running the app on macOS
+
+Because I'm not paying Apple $99/year for a developer certificate, macOS will throw a security warning on launch. Here's how to bypass it.
+
+**Option A: System Settings (recommended)**
+
+1. Double-click **PythonChess.app**. macOS will say it "cannot be opened because it is from an unidentified developer." Click **OK** to dismiss.
+2. Open **System Settings → Privacy & Security** and scroll down to the Security section. You'll see a message saying the app was blocked. Click **Open Anyway**.
+3. A final confirmation dialog will appear. Click **Open** and the app will launch. macOS remembers this choice, so you only need to do this once.
+
+**Option B: Terminal**
+
+Open Terminal and run:
+```bash
+xattr -cr PythonChess.app
+```
+Then double-click the app as normal. This strips the quarantine flag macOS sets on downloaded files.
+
+---
+
+### Finding the log file
+
+If something goes wrong, the rotating log is at:
+- **Linux:** `~/.cache/python-chess/log/chess.log` (or `$XDG_CACHE_HOME`)
+- **macOS:** `~/Library/Logs/python-chess/chess.log`
+- **Windows:** `%LOCALAPPDATA%\python-chess\python-chess\Logs\chess.log`
+
+---
+
 ## License
 
 GNU General Public License v3.0. See [LICENSE](LICENSE) for details.
