@@ -1,0 +1,162 @@
+"""Save/load round-trip and corrupt-save tests."""
+from __future__ import annotations
+
+import json
+
+import chess
+import pytest
+
+from chess_game import io as save_io
+
+
+def test_write_read_roundtrip_pvp(isolated_save_dir):
+    moves = [chess.Move.from_uci(m) for m in ["e2e4", "e7e5", "g1f3"]]
+    save_io.write_save("pvp", moves)
+    data = save_io.read_save("pvp")
+    assert data is not None
+    assert data.mode == "pvp"
+    assert data.moves == moves
+
+
+def test_write_read_roundtrip_bot(isolated_save_dir):
+    moves = [chess.Move.from_uci(m) for m in ["d2d4", "d7d5"]]
+    save_io.write_save("bot", moves, color="black", level=7)
+    data = save_io.read_save("bot")
+    assert data is not None
+    assert data.mode == "bot"
+    assert data.color == "black"
+    assert data.level == 7
+    assert data.moves == moves
+
+
+def test_read_save_returns_none_when_missing(isolated_save_dir):
+    assert save_io.read_save("pvp") is None
+
+
+def test_corrupt_save_raises_not_silently_truncates(isolated_save_dir):
+    save_dir = save_io.get_save_dir()
+    path = save_dir / save_io.SAVE_FILENAMES["pvp"]
+    payload = {"version": 1, "mode": "pvp", "moves": ["e2e4", "not_a_real_move_xyz"]}
+    with open(path, "w") as f:
+        json.dump(payload, f)
+
+    with pytest.raises(save_io.CorruptSaveError):
+        save_io.read_save("pvp")
+
+    # The corrupt file must be left untouched - never silently rewritten shorter.
+    with open(path) as f:
+        still_there = json.load(f)
+    assert still_there["moves"] == ["e2e4", "not_a_real_move_xyz"]
+
+
+def test_corrupt_save_illegal_move_in_otherwise_valid_sequence_raises(isolated_save_dir):
+    save_dir = save_io.get_save_dir()
+    path = save_dir / save_io.SAVE_FILENAMES["pvp"]
+    # e2e4 legal, then e2e4 again is illegal (no piece there anymore)
+    payload = {"version": 1, "mode": "pvp", "moves": ["e2e4", "e2e4"]}
+    with open(path, "w") as f:
+        json.dump(payload, f)
+
+    with pytest.raises(save_io.CorruptSaveError):
+        save_io.read_save("pvp")
+
+
+def test_write_is_atomic_no_tmp_file_left_behind(isolated_save_dir):
+    moves = [chess.Move.from_uci("e2e4")]
+    save_io.write_save("pvp", moves)
+    save_dir = save_io.get_save_dir()
+    leftover_tmp_files = list(save_dir.glob("*.tmp"))
+    assert leftover_tmp_files == []
+
+
+def test_preferences_roundtrip(isolated_save_dir):
+    save_io.write_preferences("white_blue", "yellow")
+    prefs = save_io.read_preferences()
+    assert prefs["board_theme"] == "white_blue"
+    assert prefs["arrow_theme"] == "yellow"
+
+
+def test_legacy_csv_save_migration(isolated_save_dir):
+    save_dir = save_io.get_save_dir()
+    legacy_path = save_dir / save_io._LEGACY_SAVE_FILENAMES["bot"]
+    legacy_path.write_text("mode=bot,color=black,level=8\ne2e4,e7e5\n")
+
+    data = save_io.read_save("bot")
+    assert data is not None
+    assert data.color == "black"
+    assert data.level == 8
+    assert data.moves == [chess.Move.from_uci("e2e4"), chess.Move.from_uci("e7e5")]
+
+    # Migration should have written the new JSON format and removed the old file.
+    assert not legacy_path.exists()
+    new_path = save_dir / save_io.SAVE_FILENAMES["bot"]
+    assert new_path.exists()
+
+
+def test_legacy_save_with_old_difficulty_key(isolated_save_dir):
+    save_dir = save_io.get_save_dir()
+    legacy_path = save_dir / save_io._LEGACY_SAVE_FILENAMES["bot"]
+    legacy_path.write_text("mode=bot,color=white,difficulty=3\ne2e4\n")
+    data = save_io.read_save("bot")
+    assert data.level == 3
+
+
+def test_get_save_dir_creates_directory_with_owner_only_perms():
+    """Real platformdirs path, created with 0700 on POSIX."""
+    import stat
+    import sys
+
+    path = save_io.get_save_dir()
+    assert path.is_dir()
+    if sys.platform != "win32":
+        mode = stat.S_IMODE(path.stat().st_mode)
+        assert mode == 0o700
+
+
+def test_read_preferences_returns_empty_dict_when_nothing_saved(isolated_save_dir):
+    assert save_io.read_preferences() == {}
+
+
+def test_delete_save_removes_file(isolated_save_dir):
+    moves = [chess.Move.from_uci("e2e4")]
+    save_io.write_save("pvp", moves)
+    assert save_io.read_save("pvp") is not None
+    save_io.delete_save("pvp")
+    assert save_io.read_save("pvp") is None
+
+
+def test_delete_save_on_nonexistent_save_is_a_noop(isolated_save_dir):
+    save_io.delete_save("pvp")  # should not raise
+
+
+def test_read_save_unsupported_schema_version_raises(isolated_save_dir):
+    save_dir = save_io.get_save_dir()
+    path = save_dir / save_io.SAVE_FILENAMES["pvp"]
+    with open(path, "w") as f:
+        json.dump({"version": 999, "mode": "pvp", "moves": []}, f)
+    with pytest.raises(save_io.CorruptSaveError):
+        save_io.read_save("pvp")
+
+
+def test_write_save_unknown_mode_is_a_noop_not_a_crash(isolated_save_dir):
+    save_io.write_save("not_a_real_mode", [])  # should not raise
+
+
+def test_empty_legacy_save_file_raises_corrupt(isolated_save_dir):
+    save_dir = save_io.get_save_dir()
+    legacy_path = save_dir / save_io._LEGACY_SAVE_FILENAMES["pvp"]
+    legacy_path.write_text("")
+    with pytest.raises(save_io.CorruptSaveError):
+        save_io.read_save("pvp")
+
+
+def test_legacy_preferences_migration(isolated_save_dir):
+    save_dir = save_io.get_save_dir()
+    legacy_path = save_dir / save_io._LEGACY_PREF_FILENAME
+    legacy_path.write_text("board_theme=white_red\narrow_theme=green\n")
+    prefs = save_io.read_preferences()
+    assert prefs["board_theme"] == "white_red"
+    assert prefs["arrow_theme"] == "green"
+    assert not legacy_path.exists()
+    new_path = save_dir / save_io.PREF_FILENAME
+    assert new_path.exists()
