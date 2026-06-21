@@ -181,17 +181,13 @@ The bot runs in a background `BotWorker` thread that is **cancellable** (`thread
 
 Saves are written as versioned JSON to a per-user app-data directory (`platformdirs.user_data_dir`) via an atomic `tempfile` + `os.replace` write. A corrupt save raises a user-facing error modal rather than silently starting a fresh game.
 
-### Drag-and-drop
-
-A 5px `DRAG_THRESHOLD_PX` constant distinguishes a click from a drag. On mousedown over a selectable piece, a `drag_pending` flag is armed. If the cursor moves past the threshold before mouseup, `drag_active` is set and the piece is lifted off the board (suppressed from its origin square) and drawn at the cursor. On release, if the cursor is over a valid target square the move is applied; otherwise the drag is cancelled and the piece stays selected. A safety net in `_frame` clears stale drag state if a mouseup was swallowed by an overlay.
-
-### Board flip animation
-
-The flip plays in two phases: a 300ms delay (so the player sees the piece land) followed by a 300ms ease-in-out horizontal scale dip to 78% width and back. The `board_flipped` flag is SET to the absolute target orientation (not toggled) at the animation midpoint, hidden by the scale minimum. A per-frame `_enforce_pvp_orientation` safety net force-corrects any drift. All piece interaction is blocked while `flip.is_active()` returns True.
+---
 
 ### Logging
 
 Diagnostics go to a rotating log file in `platformdirs.user_log_dir("python-chess")` (1 MB, 3 backups). Under a PyInstaller `--windowed` build where stdout is discarded, the log file is the only place to find errors. Check there first if something goes wrong.
+
+---
 
 ### Development
 
