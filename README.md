@@ -96,7 +96,7 @@ pip install pyinstaller
 
 **Linux:**
 ```bash
-PyInstaller --onefile --icon=icon.ico --add-data "data:data" --name "PythonChess" main.py
+PyInstaller --onefile --add-data "data:data" --name "PythonChess" main.py
 ```
 
 **macOS:**
