@@ -2,7 +2,7 @@
 
 A desktop chess game built with Python and pygame, powered by the `python-chess` library for rules and move validation.
 
-![Python](https://img.shields.io/badge/Python-3.10%2B-blue) ![pygame](https://img.shields.io/badge/pygame-2.5%2B-green) ![License](https://img.shields.io/badge/License-GPL--3.0-orange) ![Tests](https://img.shields.io/badge/tests-123%20passing-brightgreen)
+![Python](https://img.shields.io/badge/Python-3.10%2B-blue) ![pygame](https://img.shields.io/badge/pygame-2.5%2B-green) ![License](https://img.shields.io/badge/License-GPL--3.0-orange) ![Tests](https://img.shields.io/badge/tests-128%20passing-brightgreen)
 
 ---
 
@@ -18,6 +18,8 @@ A desktop chess game built with Python and pygame, powered by the `python-chess`
 - 10-level slider ranging from *Novice* to *Grandmaster*, with tier labels and descriptions
 - The bot runs on a background thread so the UI stays responsive while it thinks
 - The bot thread is **cancellable**. Restart or quit mid-think and it stops within ~2 seconds
+- The search uses **alpha-beta with Principal Variation Search**, a transposition table, killer moves, a per-instance history heuristic, quiescence search, MVV-LVA move ordering, and a Polyglot opening book
+- **Null-move pruning** skips subtrees where even passing the turn is too good for the opponent to tolerate — adding roughly 2–4 ply of effective depth at the higher difficulty levels, while a non-pawn-material floor keeps it out of zugzwang-prone endgames where "passing" is illegally optimistic
 
 **Board & UI**
 - **Drag-and-drop piece movement** — pick up a piece and drop it on a target square
@@ -29,7 +31,7 @@ A desktop chess game built with Python and pygame, powered by the `python-chess`
 - Scrollable move history panel with click-to-review navigation
 - Arrow drawing on the board (right-click drag) with configurable colour themes
 - Pawn promotion overlay strip with hover tooltips, keyboard-selectable (`Q/R/B/N`)
-- In-game menu overlay (save, quit, return to main menu)
+- In-game menu overlay (save, export PGN, quit, return to main menu)
 - Game-over overlay with termination reason and result
 
 **Customisation**
@@ -52,6 +54,12 @@ A desktop chess game built with Python and pygame, powered by the `python-chess`
 - Atomic, versioned JSON saves. A crash mid-write or a corrupt file can never silently erase your game
 - Resuming a PvP game orients the board for whichever side is to move
 
+**PGN export**
+- Export the current game to a standard `.pgn` file at any time from the in-game menu
+- Exports are timestamped and land in their own `pgn/` subdirectory of the save dir, so you can keep more than one
+- Headers include `White`, `Black`, `Date`, `Result`, and (for bot games) a non-standard `Difficulty` tag with the level — PGN readers that don't recognise the extra tag simply ignore it
+- Moves are re-rendered to SAN by `chess.pgn`'s own writer, so the export doesn't depend on two independent SAN implementations staying in agreement
+
 **Accessibility**
 - Full keyboard navigation: `Tab`/`Shift+Tab` to move focus, `Enter`/`Space` to activate, `Esc` to back out
 - WCAG-AA-compliant text contrast across all UI
@@ -64,13 +72,23 @@ A desktop chess game built with Python and pygame, powered by the `python-chess`
 ## Requirements
 
 - `python >= 3.10.0`
-- `pygame >= 2..0`
+- `pygame >= 2.5.0`
 - `chess >= 1.10.0`
 - `platformdirs >= 4.2`
 
 ---
 
 ## Installation
+
+### Option A: prebuilt binary (recommended)
+
+Download the latest build for your platform from the [Releases page](https://github.com/bottledpepsi/Python-Chess/releases). Every release automatically produces standalone binaries for Linux, macOS, and Windows via GitHub Actions — no Python installation required.
+
+- **Linux:** extract the `.tar.gz` and run `./PythonChess`
+- **macOS:** see [Running the app on macOS](#running-the-app-on-macos) below for the one-time Gatekeeper bypass
+- **Windows:** unzip and double-click `PythonChess.exe`
+
+### Option B: from source
 
 ```bash
 # Clone the repository
@@ -123,11 +141,14 @@ Python-Chess/
 │   ├── imgs/                    # Piece PNG assets
 │   ├── sounds/                  # move.ogg, capture.ogg
 │   └── book/gm2001.bin          # Polyglot opening book
+├── .github/workflows/
+│   ├── ci.yml                   # ruff + mypy + pytest on push/PR (Linux, macOS, Windows)
+│   └── release.yml              # Builds + uploads binaries on every tag push
 └── chess_game/                  # The game itself
-    ├── app.py                   # main() loop + state machine entry + drag/flip/fullscreen
+    ├── app.py                   # main() loop + state machine entry + drag/flip/fullscreen + PGN export wiring
     ├── state.py                 # GameState (Enum) + transition table (incl. OPPONENT_PICK)
     ├── game.py                  # @dataclass Game, owns all in-game state + flip animation
-    ├── io.py                    # Atomic, versioned JSON saves + preferences (incl. fullscreen)
+    ├── io.py                    # Atomic, versioned JSON saves + preferences + export_pgn()
     ├── log.py                   # Rotating file logger
     ├── bot_worker.py            # Cancellable, epoch-guarded bot worker
     ├── theme.py                 # Colours, fonts, board/arrow themes (AA-checked)
@@ -139,14 +160,14 @@ Python-Chess/
     ├── review.py                # Review-mode state
     ├── adapter.py               # Wraps python-chess Board; tracks captures, SAN history
     ├── engine/
-    │   ├── bot.py               # Alpha-beta bot with quiescence, TT, and abort support
+    │   ├── bot.py               # Alpha-beta + PVS + null-move pruning + quiescence + TT + per-instance history + book
     │   └── piece_tables.py
     └── render/
         ├── board.py             # draw_board (cached surface) + label clearing on flip
         ├── trays.py             # Captured-piece trays
         ├── history.py           # Move-history panel
         ├── overlays.py          # Promotion, winner fade, modals
-        ├── menus.py             # Main menu, opponent picker, color pick, difficulty, preferences
+        ├── menus.py             # Main menu, opponent picker, color pick, difficulty, preferences, in-game overlay (Save / Export PGN / Quit)
         └── arrows.py            # Right-click analysis arrows
 ```
 
@@ -163,6 +184,7 @@ Python-Chess/
 | Step review backward | `←` arrow key |
 | Step review forward | `→` arrow key |
 | Open in-game menu | `≡` Menu button (top-right of board) |
+| Export current game to PGN | In-game menu → **Export PGN** |
 | Toggle fullscreen | `F11` |
 | Cancel / back out | `Esc` |
 | Navigate UI focus | `Tab` / `Shift+Tab` |
@@ -177,9 +199,11 @@ The game is structured as a `chess_game/` package, with `main.py` as a thin laun
 
 The `ChessAdapter` class (in `chess_game/adapter.py`) wraps `chess.Board` and exposes a clean interface (turn, legal moves, SAN history, captured pieces), so the UI never touches `python-chess` internals directly.
 
-The bot runs in a background `BotWorker` thread that is **cancellable** (`threading.Event` abort) and **epoch-guarded**. Restarting mid-think joins the prior thread, and any stale result is dropped by epoch mismatch rather than applied to the new game. The transposition table is only cleared after the worker has joined.
+The bot runs in a background `BotWorker` thread that is **cancellable** (`threading.Event` abort) and **epoch-guarded**. Restarting mid-think joins the prior thread, and any stale result is dropped by epoch mismatch rather than applied to the new game. The transposition table and history heuristic are only cleared after the worker has joined.
 
-Saves are written as versioned JSON to a per-user app-data directory (`platformdirs.user_data_dir`) via an atomic `tempfile` + `os.replace` write. A corrupt save raises a user-facing error modal rather than silently starting a fresh game.
+The search itself is alpha-beta with Principal Variation Search, backed by a transposition table (exact / lower / upper bound entries), a two-slot-per-depth killer-move heuristic, a **per-instance** history heuristic (so two `ChessBot` objects never share move-ordering state), MVV-LVA capture ordering, quiescence search at the leaves, and **null-move pruning** gated by a non-pawn-material floor to avoid zugzwang. A Polyglot opening book (`data/book/gm2001.bin`) supplies weighted-random opening moves until the human deviates from the book.
+
+Saves are written as versioned JSON to a per-user app-data directory (`platformdirs.user_data_dir`) via an atomic `tempfile` + `os.replace` write. A corrupt save raises a user-facing error modal rather than silently starting a fresh game. PGN exports are written separately into a `pgn/` subdirectory of the same app-data dir, one timestamped file per export.
 
 ---
 
@@ -195,10 +219,12 @@ Diagnostics go to a rotating log file in `platformdirs.user_log_dir("python-ches
 pip install -e ".[dev]"          # pytest, pytest-cov, ruff, mypy, pyinstaller
 ruff check .                     # lint
 mypy chess_game                  # type-check
-pytest --cov=chess_game          # tests (123 passing, ≥70% coverage on pure-logic modules)
+pytest --cov=chess_game          # tests (128 passing, ≥70% coverage on pure-logic modules)
 ```
 
-A GitHub Actions workflow (`.github/workflows/ci.yml`) runs ruff + mypy + pytest on every push and pull request for Linux, macOS, and Windows.
+A GitHub Actions workflow (`.github/workflows/ci.yml`) runs ruff + mypy + pytest on every push and pull request for Linux, macOS, and Windows, across Python 3.10, 3.11, and 3.12.
+
+A second workflow (`.github/workflows/release.yml`) triggers on every `v*` tag push, runs the test suite, builds standalone PyInstaller binaries for all three platforms, and uploads them to the GitHub release — so every release ships with ready-to-run downloads.
 
 ---
 
@@ -229,6 +255,15 @@ If something goes wrong, the rotating log is at:
 - **Linux:** `~/.cache/python-chess/log/chess.log` (or `$XDG_CACHE_HOME`)
 - **macOS:** `~/Library/Logs/python-chess/chess.log`
 - **Windows:** `%LOCALAPPDATA%\python-chess\python-chess\Logs\chess.log`
+
+### Finding exported PGN files
+
+Exported games land in a `pgn/` subdirectory of the save dir:
+- **Linux:** `~/.local/share/python-chess/pgn/`
+- **macOS:** `~/Library/Application Support/python-chess/pgn/`
+- **Windows:** `%APPDATA%\python-chess\pgn\`
+
+Each export is named `python-chess_YYYYMMDD_HHMMSS.pgn`, so you can keep more than one without overwriting.
 
 ---
 
