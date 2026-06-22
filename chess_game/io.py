@@ -5,6 +5,8 @@ Covers:
   - corrupt saves raise CorruptSaveError instead of being swallowed.
   - writes are atomic (tempfile + os.replace) and carry a schema version.
   - user_data_dir gets 0700 perms on POSIX "for free".
+  - export_pgn() writes a standalone .pgn for sharing/analysis elsewhere,
+    independent of the JSON save format above.
 """
 from __future__ import annotations
 
@@ -12,13 +14,18 @@ import json
 import os
 import tempfile
 from dataclasses import dataclass, field
+from datetime import date, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import chess
+import chess.pgn
 import platformdirs
 
 from chess_game.log import get_logger
+
+if TYPE_CHECKING:
+    from chess_game.adapter import ChessAdapter
 
 SCHEMA_VERSION = 1
 
@@ -33,6 +40,12 @@ _LEGACY_SAVE_FILENAMES = {
 }
 PREF_FILENAME = "python-chess_preferences.json"
 _LEGACY_PREF_FILENAME = "python-chess_preferences.txt"
+
+# PGN exports live in their own subdirectory of the save dir, since unlike
+# saves/preferences there can be many of them (one per exported game) and
+# they're meant to be found and opened by the user, not just round-tripped
+# by this app.
+PGN_SUBDIR = "pgn"
 
 
 class CorruptSaveError(Exception):
@@ -172,6 +185,64 @@ def write_save(mode: str, moves: list[chess.Move], color: str = "white", level: 
         _atomic_write_json(path, payload)
     except OSError:
         logger.exception("Failed to save game (%s)", mode)
+
+
+def pgn_export_path() -> Path:
+    """Return a fresh, timestamped path for the next PGN export.
+
+    Lives in get_save_dir()/PGN_SUBDIR so exports don't clutter the same
+    directory as the JSON saves, and each export gets its own filename
+    (unlike write_save, which always overwrites the one save slot for a
+    given mode) since the user may want to keep more than one.
+    """
+    save_dir = get_save_dir() / PGN_SUBDIR
+    save_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return save_dir / f"python-chess_{stamp}.pgn"
+
+
+def export_pgn(
+    adapter: ChessAdapter,
+    path: Path,
+    mode: str = "pvp",
+    color: str = "white",
+    level: int = 5,
+) -> None:
+    """Write *adapter*'s move history to *path* as a standard PGN file.
+
+    Moves are taken from adapter.board.move_stack (not adapter.san_history)
+    and re-rendered to SAN by chess.pgn's own writer, so the export doesn't
+    depend on two independent SAN implementations staying in agreement.
+
+    `mode`/`color`/`level` mirror write_save()'s parameters: for bot games
+    the side the human isn't playing gets "Bot" in White/Black, and a
+    non-standard "Difficulty" tag records the level — PGN readers that
+    don't recognise an extra tag pair simply ignore it.
+
+    Raises
+    ------
+    OSError
+        Propagated from the write itself; callers should catch this the
+        same way write_save()'s callers do (see app.py).
+    """
+    white = "Bot" if mode == "bot" and color != "white" else "Player"
+    black = "Bot" if mode == "bot" and color == "white" else "Player"
+
+    game = chess.pgn.Game()
+    game.headers["White"] = white
+    game.headers["Black"] = black
+    game.headers["Date"] = date.today().strftime("%Y.%m.%d")
+    game.headers["Result"] = adapter.board.result(claim_draw=True)
+    if mode == "bot":
+        game.headers["Difficulty"] = str(level)
+
+    node: chess.pgn.GameNode = game
+    for move in adapter.board.move_stack:
+        node = node.add_variation(move)
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        print(game, file=f)
 
 
 def _validate_moves(raw_moves: list[str]) -> list[chess.Move]:

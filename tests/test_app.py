@@ -233,6 +233,41 @@ def test_move_animation_actually_paints_a_sliding_sprite(app):
     assert painted, "no pixels around the interpolated position differ from the blank background"
 
 
+# ── In-game main menu overlay (Save & Quit / Export PGN / Quit) ──────────────
+
+def test_export_pgn_button_writes_file_and_keeps_game_open(app, tmp_path, monkeypatch):
+    from chess_game import io as save_io
+
+    app.game.state = GameState.PVP
+    app.start_game()
+
+    moves = ['e2e4', 'e7e5']
+    for uci in moves:
+        _finish_animation(app)
+        mv = chess.Move.from_uci(uci)
+        fx, fy = _square_center(mv.from_square)
+        tx, ty = _square_center(mv.to_square)
+        _click(app, fx, fy)
+        _click(app, tx, ty)
+
+    export_path = tmp_path / "exported.pgn"
+    monkeypatch.setattr(save_io, "pgn_export_path", lambda: export_path)
+
+    app.game.main_menu_overlay = True
+    app._render(16)  # populates overlay_export_btn
+
+    assert app.overlay_export_btn is not None
+    cx, cy = app.overlay_export_btn.center
+    _click(app, cx, cy)
+
+    assert export_path.exists()
+    assert "1. e4 e5" in export_path.read_text()
+    # Exporting is non-destructive: the in-progress game is untouched.
+    assert app.game.main_menu_overlay is False
+    assert app.game.state == GameState.PVP
+    assert app.game.adapter is not None
+
+
 # ── Esc navigation ───────────────────────────────────────────────────────────
 
 def test_esc_backs_out_of_color_pick_to_opponent_pick(app):

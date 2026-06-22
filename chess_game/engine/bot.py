@@ -145,7 +145,15 @@ for sq in range(64):
     _PST_INDEX[chess.WHITE][sq] = (7 - rank) * 8 + file
     _PST_INDEX[chess.BLACK][sq] = rank * 8 + file
 
-_HISTORY: dict[str, int] = {}
+# Non-pawn material total (in centipawn units) below which null-move
+# pruning is skipped, to avoid zugzwang-prone king-and-pawn endgames where
+# "passing" is illegally optimistic. Roughly one minor piece per side.
+_NULL_MOVE_MATERIAL_FLOOR = 2 * _MATERIAL[chess.KNIGHT]
+
+# Minimum depth before null-move pruning is attempted — at low depth the
+# reduced sub-search (depth - 3) would go negative or be too shallow to
+# trust, so this stage is skipped entirely below it.
+_NULL_MOVE_MIN_DEPTH = 3
 
 
 def _pst_index(sq, color):
@@ -173,6 +181,22 @@ def _evaluate(board, bot_color):
     return score
 
 
+def _non_pawn_material(board, color):
+    """
+    Sum of material (centipawns) for *color*'s knights/bishops/rooks/queens.
+
+    Used to gate null-move pruning: passing the turn is only a sound
+    heuristic when the side to move has enough material that "doing
+    nothing" can't itself be the best move (zugzwang). Pawn-and-king
+    endgames are exactly the case where that assumption breaks down, so
+    pawns and the king are deliberately excluded from this count.
+    """
+    total = 0
+    for piece_type in (chess.KNIGHT, chess.BISHOP, chess.ROOK, chess.QUEEN):
+        total += len(board.pieces(piece_type, color)) * _MATERIAL[piece_type]
+    return total
+
+
 # ── Move ordering ─────────────────────────────────────────────────────────────
 
 def _mvv_lva_score(board, move):
@@ -184,10 +208,15 @@ def _mvv_lva_score(board, move):
     return 0
 
 
-def _order_moves(board, moves, killers, tt_move):
+def _order_moves(board, moves, killers, tt_move, history):
     """
     Priority ordering: TT best move → captures (MVV-LVA) → killers → quiet.
     Better ordering means more early cutoffs → faster search.
+
+    `history` is the per-ChessBot-instance history-heuristic table (scores
+    for quiet moves that have produced cutoffs before), passed in rather
+    than read from a module global so it never bleeds between games or
+    between concurrent ChessBot instances.
     """
     tt_list     = []
     captures    = []
@@ -203,7 +232,7 @@ def _order_moves(board, moves, killers, tt_move):
         if move in killers:
             killer_list.append(move)
             continue
-        quiet.append((move, _HISTORY.get(move.uci(), 0)))
+        quiet.append((move, history.get(move.uci(), 0)))
     captures.sort(key=lambda x: x[1], reverse=True)
     quiet.sort(key=lambda x: x[1], reverse=True)
     return tt_list + [m for m, _ in captures] + killer_list + [m for m, _ in quiet]
@@ -256,11 +285,14 @@ def _quiesce(board, alpha, beta, maximising, bot_color, abort=None):
 # ── Alpha-beta with TT + killers ──────────────────────────────────────────────
 
 def _alphabeta(board, depth, alpha, beta, maximising, bot_color,
-               killers, tt, root=False, abort=None):
+               killers, tt, history, root=False, abort=None):
     """
     Recursive alpha-beta with:
       - Transposition table (exact / lower / upper bound entries)
       - Killer move heuristic (two slots per depth)
+      - History heuristic (per-ChessBot-instance, passed in via `history`)
+      - Null-move pruning (skipped near the leaves and in low-material
+        endgames — see `_NULL_MOVE_MIN_DEPTH` / `_NULL_MOVE_MATERIAL_FLOOR`)
       - Quiescence search at leaf nodes
     """
     if abort is not None and abort.is_set():
@@ -295,9 +327,45 @@ def _alphabeta(board, depth, alpha, beta, maximising, bot_color,
     if depth == 0:
         return _quiesce(board, alpha, beta, maximising, bot_color, abort), None
 
+    # ── Null-move pruning ────────────────────────────────────────────────────
+    # Idea: give the side to move a free "pass" and search at a reduced depth
+    # with a null window just outside beta/alpha. If even doing nothing is
+    # too good for the opponent to tolerate (maximiser) — or too bad for them
+    # to allow (minimiser) — the real move at this node is assumed to also
+    # cause a cutoff, so the whole subtree is pruned without expanding it.
+    #
+    # Not applied at the root (root=True relies on every move being scored),
+    # never while in check (a "pass" while in check isn't a legal position to
+    # reason about), and never when material is too thin (see
+    # _non_pawn_material) since zugzwang positions are exactly where passing
+    # is illegally optimistic and the heuristic would prune a winning move.
+    if (
+        not root
+        and depth >= _NULL_MOVE_MIN_DEPTH
+        and not board.is_check()
+        and _non_pawn_material(board, board.turn) >= _NULL_MOVE_MATERIAL_FLOOR
+    ):
+        board.push(chess.Move.null())
+        if maximising:
+            null_score, _ = _alphabeta(
+                board, depth - 3, beta - 1, beta,
+                False, bot_color, killers, tt, history, abort=abort
+            )
+            board.pop()
+            if null_score >= beta:
+                return beta, None
+        else:
+            null_score, _ = _alphabeta(
+                board, depth - 3, alpha, alpha + 1,
+                True, bot_color, killers, tt, history, abort=abort
+            )
+            board.pop()
+            if null_score <= alpha:
+                return alpha, None
+
     # ── Move generation + ordering ────────────────────────────────────────────
     depth_killers = killers[depth] if depth < len(killers) else []
-    moves = _order_moves(board, list(board.legal_moves), depth_killers, tt_move)
+    moves = _order_moves(board, list(board.legal_moves), depth_killers, tt_move, history)
     if not moves:
         return 0, None
 
@@ -310,28 +378,28 @@ def _alphabeta(board, depth, alpha, beta, maximising, bot_color,
         if move_index == 0:
             score, _ = _alphabeta(
                 board, depth - 1, alpha, beta,
-                not maximising, bot_color, killers, tt, abort=abort
+                not maximising, bot_color, killers, tt, history, abort=abort
             )
         else:
             if maximising:
                 score, _ = _alphabeta(
                     board, depth - 1, alpha, min(beta, alpha + 1),
-                    not maximising, bot_color, killers, tt, abort=abort
+                    not maximising, bot_color, killers, tt, history, abort=abort
                 )
                 if score > alpha and score < beta:
                     score, _ = _alphabeta(
                         board, depth - 1, score, beta,
-                        not maximising, bot_color, killers, tt, abort=abort
+                        not maximising, bot_color, killers, tt, history, abort=abort
                     )
             else:
                 score, _ = _alphabeta(
                     board, depth - 1, max(alpha, beta - 1), beta,
-                    not maximising, bot_color, killers, tt, abort=abort
+                    not maximising, bot_color, killers, tt, history, abort=abort
                 )
                 if score > alpha and score < beta:
                     score, _ = _alphabeta(
                         board, depth - 1, alpha, score,
-                        not maximising, bot_color, killers, tt, abort=abort
+                        not maximising, bot_color, killers, tt, history, abort=abort
                     )
         board.pop()
 
@@ -351,7 +419,7 @@ def _alphabeta(board, depth, alpha, beta, maximising, bot_color,
                 if move != k[0]:
                     k[1] = k[0]
                     k[0] = move
-                _HISTORY[move.uci()] = _HISTORY.get(move.uci(), 0) + depth * depth
+                history[move.uci()] = history.get(move.uci(), 0) + depth * depth
             break
 
     # ── TT store ──────────────────────────────────────────────────────────────
@@ -369,7 +437,7 @@ def _alphabeta(board, depth, alpha, beta, maximising, bot_color,
 
 # ── Root ranking (no inter-sibling pruning) ───────────────────────────────────
 
-def _rank_all_moves(board, depth, bot_color, killers, tt, abort=None):
+def _rank_all_moves(board, depth, bot_color, killers, tt, history, abort=None):
     """
     Score every legal root move at `depth`.
 
@@ -386,7 +454,7 @@ def _rank_all_moves(board, depth, bot_color, killers, tt, abort=None):
     moves = _order_moves(
         board, list(board.legal_moves),
         killers[depth] if depth < len(killers) else [],
-        tt_move,
+        tt_move, history,
     )
 
     for move in moves:
@@ -395,7 +463,7 @@ def _rank_all_moves(board, depth, bot_color, killers, tt, abort=None):
         board.push(move)
         score, _ = _alphabeta(
             board, depth - 1, -INF, INF,
-            False, bot_color, killers, tt, abort=abort
+            False, bot_color, killers, tt, history, abort=abort
         )
         board.pop()
         scored.append((score, move))
@@ -454,6 +522,10 @@ class ChessBot:
     def __init__(self, max_depth: int = 3, book_path: str | None = None):
         self.max_depth = max_depth
         self._tt: dict[tuple, tuple[int, int, int, chess.Move | None]] = {}   # transposition table; persists across moves in a game
+        # History heuristic table: quiet-move UCI -> cutoff score. Lives on
+        # the instance (not a module global) so it never leaks between
+        # separate ChessBot instances or across games — see clear_tt().
+        self._history: dict[str, int] = {}
 
         # ── Opening book setup ────────────────────────────────────────────────
         # book_path must be supplied by the caller (e.g. via resource_path in
@@ -548,10 +620,15 @@ class ChessBot:
 
     def clear_tt(self):
         """
-        Clear the transposition table and reset the opening book for a new game.
-        Call at the start of every new game.
+        Clear the transposition table and history heuristic, and reset the
+        opening book, for a new game. Call at the start of every new game.
+
+        Clearing _history here (alongside _tt) is what fixes the cross-game
+        move-ordering leak: without it, quiet-move scores from a finished
+        game would keep influencing ordering decisions in the next one.
         """
         self._tt.clear()
+        self._history.clear()
         self._reset_book()
 
     def get_move(self, board, color, difficulty_level: int = 10, abort=None):
@@ -681,11 +758,11 @@ class ChessBot:
         for d in range(1, depth):
             _alphabeta(
                 board, d, -INF, INF,
-                True, bot_color, killers, self._tt, root=True, abort=abort
+                True, bot_color, killers, self._tt, self._history, root=True, abort=abort
             )
 
         # Final full-depth ranking (all root moves scored without inter-sibling pruning)
-        ranked = _rank_all_moves(board, depth, bot_color, killers, self._tt, abort=abort)
+        ranked = _rank_all_moves(board, depth, bot_color, killers, self._tt, self._history, abort=abort)
         return ranked[:n]
 
     def _weighted_blunder_select(self, pool):

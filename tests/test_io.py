@@ -160,3 +160,80 @@ def test_legacy_preferences_migration(isolated_save_dir):
     assert not legacy_path.exists()
     new_path = save_dir / save_io.PREF_FILENAME
     assert new_path.exists()
+
+
+def _adapter_with_moves(ucis):
+    from chess_game.adapter import ChessAdapter
+
+    adapter = ChessAdapter()
+    for uci in ucis:
+        adapter.apply_move(chess.Move.from_uci(uci))
+    return adapter
+
+
+def test_export_pgn_roundtrips_moves(isolated_save_dir, tmp_path):
+    import chess.pgn
+
+    moves = ["e2e4", "e7e5", "g1f3", "b8c6", "f1b5"]
+    adapter = _adapter_with_moves(moves)
+    path = tmp_path / "game.pgn"
+
+    save_io.export_pgn(adapter, path)
+
+    with open(path, encoding="utf-8") as f:
+        parsed = chess.pgn.read_game(f)
+    assert parsed is not None
+    assert list(parsed.mainline_moves()) == [chess.Move.from_uci(m) for m in moves]
+
+
+def test_export_pgn_sets_bot_headers_and_difficulty(isolated_save_dir, tmp_path):
+    import chess.pgn
+
+    adapter = _adapter_with_moves(["d2d4", "d7d5"])
+    path = tmp_path / "bot_game.pgn"
+
+    save_io.export_pgn(adapter, path, mode="bot", color="black", level=8)
+
+    with open(path, encoding="utf-8") as f:
+        parsed = chess.pgn.read_game(f)
+    assert parsed is not None
+    # color="black" means the human played Black, so the bot is White.
+    assert parsed.headers["White"] == "Bot"
+    assert parsed.headers["Black"] == "Player"
+    assert parsed.headers["Difficulty"] == "8"
+
+
+def test_export_pgn_pvp_has_no_difficulty_header(isolated_save_dir, tmp_path):
+    import chess.pgn
+
+    adapter = _adapter_with_moves(["e2e4"])
+    path = tmp_path / "pvp_game.pgn"
+
+    save_io.export_pgn(adapter, path, mode="pvp")
+
+    with open(path, encoding="utf-8") as f:
+        parsed = chess.pgn.read_game(f)
+    assert parsed is not None
+    assert "Difficulty" not in parsed.headers
+    assert parsed.headers["White"] == "Player"
+    assert parsed.headers["Black"] == "Player"
+
+
+def test_export_pgn_records_in_progress_result_as_unfinished(isolated_save_dir, tmp_path):
+    import chess.pgn
+
+    adapter = _adapter_with_moves(["e2e4", "e7e5"])
+    path = tmp_path / "in_progress.pgn"
+
+    save_io.export_pgn(adapter, path)
+
+    with open(path, encoding="utf-8") as f:
+        parsed = chess.pgn.read_game(f)
+    assert parsed.headers["Result"] == "*"
+
+
+def test_pgn_export_path_lands_under_save_dir_pgn_subdir(isolated_save_dir):
+    path = save_io.pgn_export_path()
+    assert path.parent == save_io.get_save_dir() / save_io.PGN_SUBDIR
+    assert path.suffix == ".pgn"
+    assert path.parent.is_dir()

@@ -116,6 +116,8 @@ class App:
         self.overlay_new_btn: pygame.Rect | None = None
         self.overlay_save_btn: pygame.Rect | None = None
         self.overlay_quit_btn: pygame.Rect | None = None
+        self.overlay_export_btn: pygame.Rect | None = None
+        self.pending_pgn_export_path: str | None = None
 
         self.pending_corrupt_error: str | None = None
 
@@ -149,6 +151,26 @@ class App:
             mode, list(self.game.adapter.board.move_stack),
             self.game.player_color, self.game.bot_level
         )
+
+    def export_pgn(self) -> None:
+        """Export the current game's move history to a PGN file.
+
+        Fire-and-forget, same as write_save(): on failure the error is
+        logged but not surfaced as a blocking modal, since losing a PGN
+        export (the JSON save still exists) isn't as consequential as
+        losing the save itself.
+        """
+        if self.game.adapter is None:
+            return
+        mode = 'bot' if self.game.state == GameState.BOT else 'pvp'
+        path = save_io.pgn_export_path()
+        try:
+            save_io.export_pgn(
+                self.game.adapter, path,
+                mode, self.game.player_color, self.game.bot_level,
+            )
+        except OSError:
+            self.logger.exception('Failed to export PGN')
 
     def safe_read_save(self, mode: str):
         """Returns SaveData, or None, or sets pending_corrupt_error and
@@ -575,6 +597,12 @@ class App:
                 g.review.reset()
                 g.state = GameState.MENU
                 g.main_menu_overlay = False
+            elif self.overlay_export_btn and self.overlay_export_btn.collidepoint(mx, my):
+                # Export and stay in the overlay/game — unlike Save & Quit
+                # and Quit, exporting a PGN isn't a reason to leave the
+                # current game in progress.
+                self.export_pgn()
+                g.main_menu_overlay = False
             elif self.overlay_quit_btn and self.overlay_quit_btn.collidepoint(mx, my):
                 mode_str = 'bot' if g.state == GameState.BOT else 'pvp'
                 save_io.delete_save(mode_str)
@@ -584,7 +612,7 @@ class App:
             else:
                 bx_chk = theme.PANEL_X // 2
                 by_chk = theme.WIN_H // 2
-                bw_chk, bh_chk = 310, 210
+                bw_chk, bh_chk = 310, 260
                 box_r = pygame.Rect(bx_chk - bw_chk // 2, by_chk - bh_chk // 2, bw_chk, bh_chk)
                 if not box_r.collidepoint(mx, my):
                     g.main_menu_overlay = False
@@ -1031,7 +1059,8 @@ class App:
                 self.screen, theme.WIN_W, theme.WIN_H, self.fonts
             )
         if g.main_menu_overlay and g.state in (GameState.PVP, GameState.BOT):
-            self.overlay_save_btn, self.overlay_quit_btn = render_menus.draw_main_menu_overlay(
+            (self.overlay_save_btn, self.overlay_quit_btn,
+             self.overlay_export_btn) = render_menus.draw_main_menu_overlay(
                 self.screen, self.fonts, theme.PANEL_X
             )
         if self.pending_corrupt_error is not None:

@@ -400,29 +400,31 @@ def draw_preferences(screen, current_board_theme, current_arrow_theme, reduced_m
 
 
 def draw_main_menu_overlay(screen, fonts, panel_x):
-    """In-game 'main menu' confirm overlay. Returns (save_btn, quit_btn)."""
+    """In-game 'main menu' confirm overlay. Returns (save_btn, quit_btn, export_btn)."""
     ov = pygame.Surface((WIN_W, WIN_H), pygame.SRCALPHA)
     ov.fill((0, 0, 0, 200))
     screen.blit(ov, (0, 0))
 
     cx = panel_x // 2
     cy = WIN_H // 2
-    bw, bh = 310, 210
+    bw, bh = 310, 260
     box = pygame.Rect(cx - bw // 2, cy - bh // 2, bw, bh)
     pygame.draw.rect(screen, (30, 30, 30), box, border_radius=14)
     pygame.draw.rect(screen, (66, 66, 66), box, 2, border_radius=14)
 
     t_s = fonts.ov_title.render('Main Menu', True, MENU_TEXT)
-    screen.blit(t_s, t_s.get_rect(center=(cx, cy - 66)))
+    screen.blit(t_s, t_s.get_rect(center=(cx, cy - 91)))
     s_s = fonts.ov_sub.render('What would you like to do?', True, MENU_TEXT_SUB)
-    screen.blit(s_s, s_s.get_rect(center=(cx, cy - 40)))
+    screen.blit(s_s, s_s.get_rect(center=(cx, cy - 65)))
 
     mx_, my_ = pygame.mouse.get_pos()
     bw2 = 210
-    save_btn = pygame.Rect(cx - bw2 // 2, cy - 12, bw2, 42)
-    quit_btn = pygame.Rect(cx - bw2 // 2, cy + 40, bw2, 42)
+    save_btn = pygame.Rect(cx - bw2 // 2, cy - 37, bw2, 42)
+    export_btn = pygame.Rect(cx - bw2 // 2, cy + 15, bw2, 42)
+    quit_btn = pygame.Rect(cx - bw2 // 2, cy + 67, bw2, 42)
     for btn, label, font, accent in (
         (save_btn, 'Save & Quit', fonts.ov_btn, (65, 115, 65)),
+        (export_btn, 'Export PGN', fonts.ov_btn_sm, (60, 80, 120)),
         (quit_btn, 'Quit Without Saving', fonts.ov_btn_sm, (130, 65, 55)),
     ):
         hov = btn.collidepoint(mx_, my_)
@@ -433,4 +435,4 @@ def draw_main_menu_overlay(screen, fonts, panel_x):
         l_s = font.render(label, True, MENU_TEXT)
         screen.blit(l_s, l_s.get_rect(center=btn.center))
 
-    return save_btn, quit_btn
+    return save_btn, quit_btn, export_btn
