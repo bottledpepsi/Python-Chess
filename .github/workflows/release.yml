@@ -90,17 +90,17 @@ jobs:
             NAME="PythonChess-${VERSION}-Linux"
             mkdir -p "package/${NAME}"
             cp dist/PythonChess "package/${NAME}/"
-            (cd package && tar -czf "${NAME}.tar.gz" "${NAME}")
+            (cd package && XZ_OPT=-9e tar -cJf "${NAME}.tar.xz" "${NAME}")
           elif [ "${{ runner.os }}" = "macOS" ]; then
             NAME="PythonChess-${VERSION}-macOS"
             mkdir -p "package/${NAME}"
             cp -r dist/PythonChess.app "package/${NAME}/"
-            (cd package && zip -r "${NAME}.zip" "${NAME}")
+            (cd package && zip -r -9 "${NAME}.zip" "${NAME}")
           else
             NAME="PythonChess-${VERSION}-Windows"
             mkdir -p "package/${NAME}"
             cp dist/PythonChess.exe "package/${NAME}/"
-            powershell -Command "Compress-Archive -Path 'package/${NAME}' -DestinationPath 'package/${NAME}.zip'"
+            powershell -Command "Compress-Archive -Path 'package/${NAME}' -DestinationPath 'package/${NAME}.zip' -CompressionLevel Optimal"
           fi
 
       - name: Upload artifact
@@ -108,7 +108,7 @@ jobs:
         with:
           name: ${{ matrix.artifact_name }}
           path: |
-            package/*.tar.gz
+            package/*.tar.xz
             package/*.zip
 
   release:
@@ -127,6 +127,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            artifacts/*.tar.gz
+            artifacts/*.tar.xz
             artifacts/*.zip
           generate_release_notes: true
