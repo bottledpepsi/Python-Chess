@@ -58,23 +58,33 @@ jobs:
       - name: Build with PyInstaller (Linux)
         if: runner.os == 'Linux'
         run: |
+          python -m venv build-venv
+          source build-venv/bin/activate
+          pip install --upgrade pip
+          pip install .
+          pip install pyinstaller
           pyinstaller --onefile --add-data "data:data" --name "PythonChess" main.py
-
-      - name: Install Pillow (macOS icon conversion)
-        if: runner.os == 'macOS'
-        run: |
-          pip install pillow
 
       - name: Build with PyInstaller (macOS)
         if: runner.os == 'macOS'
         run: |
-          PyInstaller --onedir --windowed --icon=icon.ico --add-data "data:data" --name "PythonChess" main.py
+          python -m venv build-venv
+          source build-venv/bin/activate
+          pip install --upgrade pip
+          pip install .
+          pip install pyinstaller pillow
+          pyinstaller --onedir --windowed --icon=icon.ico --add-data "data:data" --name "PythonChess" main.py
 
       - name: Build with PyInstaller (Windows)
         if: runner.os == 'Windows'
         shell: bash
         run: |
-          PyInstaller --onefile --windowed --icon=icon.ico --add-data "data;data" --name "PythonChess" main.py
+          python -m venv build-venv
+          source build-venv/Scripts/activate
+          pip install --upgrade pip
+          pip install .
+          pip install pyinstaller
+          pyinstaller --onefile --windowed --icon=icon.ico --add-data "data;data" --name "PythonChess" main.py
 
       - name: Get version from tag
         id: version
