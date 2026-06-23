@@ -134,3 +134,65 @@ def test_null_move_pruning_skipped_under_material_floor():
     assert bot_mod._non_pawn_material(board, chess.WHITE) < bot_mod._NULL_MOVE_MATERIAL_FLOOR
     assert bot_mod._non_pawn_material(board, chess.BLACK) < bot_mod._NULL_MOVE_MATERIAL_FLOOR
 
+
+# ── Tapered evaluation ────────────────────────────────────────────────────────
+
+
+def test_king_endgame_centralised_scores_higher():
+    """In a low-phase (bare-kings-plus-a-pawn) position, a centralised
+    king must score higher for its own side than the same king tucked in
+    the corner — this is exactly what the endgame PST taper is for."""
+    centre_fen = "8/8/8/3k4/8/3K4/4P3/8 w - - 0 1"
+    corner_fen = "8/8/8/3k4/8/8/4P3/6K1 w - - 0 1"
+
+    centre_board = chess.Board(fen=centre_fen)
+    corner_board = chess.Board(fen=corner_fen)
+
+    # Both positions have identical material (one pawn, two kings) and an
+    # identical black king square, so the only difference is where the
+    # white king sits — and both are deep endgames (phase == 0), so the
+    # taper is fully weighted toward KING_END in each case.
+    assert bot_mod._phase(centre_board) == 0
+    assert bot_mod._phase(corner_board) == 0
+
+    centre_score = bot_mod._evaluate(centre_board, chess.WHITE)
+    corner_score = bot_mod._evaluate(corner_board, chess.WHITE)
+
+    assert centre_score > corner_score, (
+        f"expected a centralised king ({centre_score}) to score higher than "
+        f"a cornered king ({corner_score}) in the endgame"
+    )
+
+
+def test_phase_is_max_at_start():
+    """The starting position has every piece on the board, so the phase
+    must read the maximum value (24 = fully midgame/opening)."""
+    board = chess.Board()
+    assert bot_mod._phase(board) == 24
+
+
+def test_phase_is_min_in_bare_kings():
+    """A board with only the two kings left has phase 0 (pure endgame)."""
+    board = chess.Board(fen="8/4k3/8/8/8/8/4K3/8 w - - 0 1")
+    assert bot_mod._phase(board) == 0
+
+
+def test_evaluation_is_symmetric():
+    """_evaluate must be antisymmetric in bot_color: flipping whose
+    perspective we score from should exactly negate the result. This is
+    the cheapest way to catch a sign error introduced by the taper math
+    (e.g. accidentally tapering material, or swapping phase/inv_phase)."""
+    positions = [
+        chess.Board(),  # start position, phase == 24
+        _quiet_middlegame_board(),  # mixed phase
+        chess.Board(fen="8/4k3/8/4P3/8/4K3/8/8 w - - 0 1"),  # near-bare endgame
+        chess.Board(fen="8/8/8/3k4/8/3K4/4P3/8 w - - 0 1"),  # bare kings + a pawn
+    ]
+    for board in positions:
+        white_score = bot_mod._evaluate(board, chess.WHITE)
+        black_score = bot_mod._evaluate(board, chess.BLACK)
+        assert white_score == -black_score, (
+            f"expected _evaluate to be antisymmetric, got white={white_score} "
+            f"black={black_score} for fen={board.fen()}"
+        )
+

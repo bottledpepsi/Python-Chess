@@ -117,6 +117,9 @@ DIFFICULTY_CONFIG = {
 _BLUNDER_WEIGHTS = [50, 30, 15, 5]
 
 # ── Piece table lookup ────────────────────────────────────────────────────────
+# Each value in _RAW is now (material, midgame_pst, endgame_pst) — see
+# piece_tables.PIECE_DATA. _PT_MAP keeps that full three-tuple so _evaluate
+# can taper between the two PSTs; _MATERIAL only ever needs index 0.
 
 _PT_MAP = {
     chess.PAWN:   _RAW[' '],
@@ -145,6 +148,47 @@ for sq in range(64):
     _PST_INDEX[chess.WHITE][sq] = (7 - rank) * 8 + file
     _PST_INDEX[chess.BLACK][sq] = rank * 8 + file
 
+# Game-phase calculation: phase counts up from 0 (bare kings-and-pawns
+# endgame) to _PHASE_MAX (full material — opening), based on how much
+# non-pawn material remains on the board. Weights are per-piece, summed
+# over both sides: 1 each for knights/bishops (2 of each per side = 4
+# total per type), 2 each for rooks (2 per side = 4 total), 4 each for
+# queens (1 per side = 2 total). A fully-loaded start position therefore
+# scores 4*1 + 4*1 + 4*2 + 2*4 = 24 == _PHASE_MAX, and bare kings score 0.
+_PHASE_MAX = 24
+_PHASE_WEIGHTS = {
+    chess.KNIGHT: 1,
+    chess.BISHOP: 1,
+    chess.ROOK:   2,
+    chess.QUEEN:  4,
+}
+
+
+def _phase(board):
+    """
+    Estimate how far the game has progressed from a bare kings-and-pawns
+    endgame (0) toward the opening (24 = _PHASE_MAX), based on remaining
+    non-pawn material.
+
+    Each knight/bishop on the board (either side) contributes 1, each
+    rook 2, each queen 4 — so a fully-loaded starting position (4 minors
+    + 4 rooks + 2 queens, counting both sides) scores
+    4*1 + 4*1 + 4*2 + 2*4 = 24, and a position with no non-pawn pieces
+    left scores 0. The result is clamped to [0, 24] as a defensive
+    measure against promotion-heavy positions that could otherwise push
+    the raw count above the nominal maximum (e.g. multiple promoted
+    queens).
+
+    Higher phase => more weight on the midgame PSTs in `_evaluate`'s
+    taper; lower phase => more weight on the endgame PSTs.
+    """
+    raw = 0
+    for piece_type, weight in _PHASE_WEIGHTS.items():
+        raw += weight * len(board.pieces(piece_type, chess.WHITE))
+        raw += weight * len(board.pieces(piece_type, chess.BLACK))
+    return max(0, min(_PHASE_MAX, raw))
+
+
 # Non-pawn material total (in centipawn units) below which null-move
 # pruning is skipped, to avoid zugzwang-prone king-and-pawn endgames where
 # "passing" is illegally optimistic. Roughly one minor piece per side.
@@ -169,14 +213,27 @@ def _pst_index(sq, color):
 # ── Static evaluation ─────────────────────────────────────────────────────────
 
 def _evaluate(board, bot_color):
-    """Material + positional score from bot_color's perspective."""
+    """
+    Material + tapered positional score from bot_color's perspective.
+
+    Each piece contributes a midgame-PST value and an endgame-PST value;
+    the two are blended by the current game phase (see `_phase`) so the
+    same king, for example, is scored as "tucked safely behind a pawn
+    shield" early on and "centralised to support pawn pushes / cut off
+    the enemy king" once material has been traded down. Material itself
+    is NOT tapered — a queen is worth 900 centipawns whether it's move 5
+    or move 55; only the *positional* component shifts with the phase.
+    """
     score = 0
     pt_map = _PT_MAP
     pst_index = _PST_INDEX
+    phase = _phase(board)
+    inv_phase = _PHASE_MAX - phase
     for sq, piece in board.piece_map().items():
-        material, pst = pt_map[piece.piece_type]
-        positional = pst[pst_index[piece.color][sq]]
-        val = material + positional
+        material, mid_pst, end_pst = pt_map[piece.piece_type]
+        idx = pst_index[piece.color][sq]
+        tapered_pst = (mid_pst[idx] * phase + end_pst[idx] * inv_phase) // _PHASE_MAX
+        val = material + tapered_pst
         score += val if piece.color == bot_color else -val
     return score
 

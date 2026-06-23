@@ -67,12 +67,29 @@ KING_MID = [
      20, 30, 10,  0,  0, 10, 30, 20,
 ]
 
-# Map notation -> (material centipawns, PST list)
+# Endgame king PST: unlike the midgame table (which hugs the back rank,
+# tucked behind a pawn shield for safety), this rewards centralisation.
+# With most material off the board there's little left to attack the
+# king, and a central king is far more useful — it can support its own
+# pawns' promotion and cut off the enemy king in king-and-pawn races.
+KING_END = [
+    -50,-40,-30,-20,-20,-30,-40,-50,
+    -30,-20,-10,  0,  0,-10,-20,-30,
+    -30,-10, 20, 30, 30, 20,-10,-30,
+    -30,-10, 30, 40, 40, 30,-10,-30,
+    -30,-10, 30, 40, 40, 30,-10,-30,
+    -30,-10, 20, 30, 30, 20,-10,-30,
+    -30,-30,  0,  0,  0,  0,-30,-30,
+    -50,-30,-30,-30,-30,-30,-30,-50,
+]
+
+# Map notation -> (material centipawns, midgame PST, endgame PST)
+# For pieces with no endgame table, the endgame PST is the same as midgame.
 PIECE_DATA = {
-    ' ': (100,  PAWN),
-    'N': (320,  KNIGHT),
-    'B': (330,  BISHOP),
-    'R': (500,  ROOK),
-    'Q': (900,  QUEEN),
-    'K': (20000, KING_MID),
+    ' ': (100,  PAWN,   PAWN),
+    'N': (320,  KNIGHT, KNIGHT),
+    'B': (330,  BISHOP, BISHOP),
+    'R': (500,  ROOK,   ROOK),
+    'Q': (900,  QUEEN,  QUEEN),
+    'K': (20000, KING_MID, KING_END),
 }
