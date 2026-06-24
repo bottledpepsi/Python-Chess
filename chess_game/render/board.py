@@ -126,3 +126,109 @@ def draw_labels(screen, board_flipped, fonts):
         s = fonts.label.render(letter, True, LABEL_COL)
         fx = BOARD_X + x * TILE + (TILE - s.get_width()) // 2
         screen.blit(s, (fx, BOARD_Y + BOARD_PX + 5))
+
+
+# Eval bar geometry. It lives in the same left-margin gutter as the rank
+# labels (RANK_LABEL_W is 28px; rank labels render right-aligned against
+# the board edge, occupying roughly the rightmost 11px of that margin —
+# see draw_labels above — so a 14px-wide bar flush against the window's
+# left edge has a clear few-pixel gap and never overlaps them).
+EVAL_BAR_W = 14
+EVAL_BAR_X = 0
+EVAL_BAR_LABEL_GAP = 4
+# How far right of the bar's left edge the eval label is anchored. Moves
+# the label off the window's left edge (negative-x clipping) since every
+# realistic label string is wider than the bar itself — see draw_eval_bar.
+EVAL_BAR_LABEL_X_OFFSET = 8
+
+
+def draw_eval_bar(screen, eval_cp, board_flipped, is_mate, mate_in, fonts):
+    """Draw the always-on-analysis eval bar in the left margin.
+
+    A thin vertical strip, BOARD_PX tall, split between a light ("White")
+    fill and a dark ("Black") fill at a point determined by eval_cp via a
+    sigmoid (see analysis._eval_to_ratio) so the bar moves visibly on small
+    advantages without ever fully pegging on large ones. Mate scores are
+    the one exception: those DO peg fully to whichever side is mating,
+    with a "M{n}" label instead of a decimal eval.
+
+    When board_flipped, the bar's geometry doesn't change (it isn't tied
+    to a square), but its fill orientation does: White's fill always
+    grows from whichever edge is visually "down" for White, so flipping
+    the board flips the bar to match, exactly like the rank labels do.
+    """
+    from chess_game.analysis import _eval_to_ratio
+    from chess_game.theme import BOARD_PX, BOARD_Y, MENU_TEXT, PANEL_BDR
+
+    bar_rect = pygame.Rect(EVAL_BAR_X, BOARD_Y, EVAL_BAR_W, BOARD_PX)
+
+    if is_mate:
+        # Pegged fully to the mating side. mate_in > 0 means White mates;
+        # < 0 means Black mates (python-chess's own sign convention for
+        # PovScore(...).white().mate()). mate_in == 0 is a degenerate edge
+        # case some engines report for an already-checkmated position
+        # (python-chess normalises both Mate(0) and Mate(-0) to plain 0,
+        # so the side that delivered mate genuinely can't be recovered
+        # from this value alone). Rather than guess and risk pegging to
+        # the wrong side, fall back to an even bar — this should only
+        # ever be reached if analysis runs on a position that was already
+        # game-over, which the app doesn't normally do.
+        if mate_in is not None and mate_in > 0:
+            white_ratio = 1.0
+        elif mate_in is not None and mate_in < 0:
+            white_ratio = 0.0
+        else:
+            white_ratio = 0.5
+    else:
+        white_ratio = _eval_to_ratio(eval_cp if eval_cp is not None else 0)
+
+    # white_ratio is "fraction of the bar that is White's". White's fill
+    # grows from the bottom of the bar when the board is in its normal
+    # (White-at-bottom) orientation, and from the top when flipped (Black
+    # at the bottom). Concretely: not flipped -> Black occupies the top
+    # `black_h` pixels and White occupies the bottom `white_h` pixels;
+    # flipped -> the reverse.
+    white_h = int(round(BOARD_PX * white_ratio))
+    black_h = BOARD_PX - white_h
+
+    white_col = (235, 235, 230)
+    black_col = (40, 40, 40)
+    if board_flipped:
+        # White sits at the top in this orientation, so White's fill
+        # grows from the top and Black's from the bottom.
+        screen.fill(white_col, (bar_rect.x, bar_rect.y, EVAL_BAR_W, white_h))
+        screen.fill(black_col, (bar_rect.x, bar_rect.y + white_h, EVAL_BAR_W, black_h))
+    else:
+        screen.fill(black_col, (bar_rect.x, bar_rect.y, EVAL_BAR_W, black_h))
+        screen.fill(white_col, (bar_rect.x, bar_rect.y + black_h, EVAL_BAR_W, white_h))
+
+    pygame.draw.rect(screen, PANEL_BDR, bar_rect, 1)
+
+    # Midpoint tick, always at the bar's vertical centre regardless of
+    # orientation — it marks "dead even", not a side.
+    tick_y = bar_rect.centery
+    pygame.draw.line(screen, PANEL_BDR, (bar_rect.x, tick_y), (bar_rect.right, tick_y), 1)
+
+    # Numeric label above the bar: "+1.20" / "-0.45" / "M5" / "M-3".
+    # mate_in == 0 (mate already delivered) gets its own marker rather
+    # than the confusing "M0" — see the white_ratio branch above for why
+    # the side can't be recovered from this value.
+    if is_mate and mate_in:
+        label_text = f"M{mate_in}"
+    elif is_mate:
+        label_text = "M"
+    elif eval_cp is not None:
+        label_text = f"{eval_cp / 100:+.2f}"
+    else:
+        label_text = "--"
+    label_s = fonts.label.render(label_text, True, MENU_TEXT)
+    # Left-align the label a few pixels right of the bar's left edge,
+    # rather than centring it on the bar's own midpoint. The bar is only
+    # 14px wide but every realistic label ("+1.20", "M-12", ...) renders
+    # wider than that, so centring on bar_rect.centerx pushed the label's
+    # left edge to a negative x — off the left side of the window
+    # entirely — for every value except the shortest ones. Anchoring from
+    # the bar's left edge instead keeps the whole label on-screen and
+    # roughly above the bar regardless of how wide the text is.
+    label_x = bar_rect.x + EVAL_BAR_LABEL_X_OFFSET
+    screen.blit(label_s, (label_x, bar_rect.y - label_s.get_height() - EVAL_BAR_LABEL_GAP))

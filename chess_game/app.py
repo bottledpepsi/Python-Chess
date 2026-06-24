@@ -14,6 +14,7 @@ import pygame
 
 from chess_game import io as save_io
 from chess_game import layout, theme
+from chess_game.analysis import AnalysisWorker
 from chess_game.anim import ANIM_MS, FLIP_MIN_SCALE, ease_out
 from chess_game.assets import load_images
 from chess_game.bot_worker import BotWorker
@@ -29,6 +30,7 @@ from chess_game.render import trays as render_trays
 from chess_game.review import enter_review, exit_review, move_review
 from chess_game.sound import SoundManager
 from chess_game.state import GameState
+from chess_game.stockfish_download import StockfishDownloader
 from chess_game.widgets import FOCUS_RING, FocusableRect, FocusGroup
 
 
@@ -56,6 +58,7 @@ class App:
         board_theme = prefs.get('board_theme') or 'white_green'
         arrow_theme = prefs.get('arrow_theme') or 'blue'
         reduced_motion = bool(prefs.get('reduced_motion', False))
+        stockfish_path = prefs.get('stockfish_path') or ''
         self._fullscreen = bool(prefs.get('fullscreen', False))
         if board_theme not in theme.BOARD_THEMES:
             board_theme = 'white_green'
@@ -78,9 +81,11 @@ class App:
 
         bot = ChessBot(max_depth=3, book_path=resource_path('data/book/gm2001.bin'))
         worker = BotWorker(bot)
+        self.analysis_worker = AnalysisWorker(stockfish_path)
         self.game = Game(
             bot=bot, bot_worker=worker, board_theme=board_theme,
             arrow_theme=arrow_theme, reduced_motion=reduced_motion,
+            stockfish_path=stockfish_path,
         )
         self.game.piece_imgs = self.assets.piece_imgs
 
@@ -108,7 +113,16 @@ class App:
         self.pref_board_rects: dict = {}
         self.pref_arrow_rects: dict = {}
         self.pref_motion_rect: pygame.Rect | None = None
+        self.pref_download_rect: pygame.Rect | None = None
         self.pref_focus = FocusGroup([])
+
+        # Stockfish auto-download. status is one of 'idle'/'downloading'/
+        # 'done'/'error'; the downloader itself is polled every frame
+        # (see _poll_stockfish_download), mirroring how analysis_worker
+        # and bot_worker are polled rather than awaited.
+        self.stockfish_downloader = StockfishDownloader()
+        self.stockfish_download_status = 'idle'
+        self.stockfish_download_error: str | None = None
 
         self.menu_btn_ingame_rect: pygame.Rect | None = None
         self.menu_from_gameover_rect: pygame.Rect | None = None
@@ -120,6 +134,13 @@ class App:
         self.pending_pgn_export_path: str | None = None
 
         self.pending_corrupt_error: str | None = None
+
+        # In-game analysis toggle button rect (rebuilt every frame, like
+        # menu_btn_ingame_rect) and the one-time "Stockfish not found"
+        # modal's OK button rect.
+        self.analysis_toggle_rect: pygame.Rect | None = None
+        self.pending_analysis_missing_modal: bool = False
+        self.analysis_missing_ok_rect: pygame.Rect | None = None
 
         # Drag-and-drop state for moving pieces by dragging. `drag_pending`
         # is set on mousedown over a selectable piece; it is promoted to
@@ -139,9 +160,87 @@ class App:
     def start_game(self) -> None:
         self.game.start_game()
         self._board_surf_dirty = True
+        self.game.launch_analysis(self.analysis_worker)
 
     def launch_bot_move(self) -> None:
         self.game.launch_bot_move()
+
+    def _restart_analysis_if_enabled(self) -> None:
+        """Restart engine analysis on the post-move position. Called after
+        every move-application path (click-move, drag-move, promotion,
+        bot-move) so the eval bar and PV arrows always reflect the
+        current position, not a stale one."""
+        self.game.launch_analysis(self.analysis_worker)
+
+    def _toggle_analysis(self) -> None:
+        """Flip g.analysis_enabled. Turning it on (re)starts the worker on
+        the current position; turning it off cancels the in-flight search
+        and clears the eval bar / PV arrows so nothing stale lingers.
+
+        The first time analysis is enabled and Stockfish turns out to be
+        unavailable, a one-time modal is queued instead of silently doing
+        nothing — analysis_missing_modal_shown ensures it never fires
+        again for the rest of this App's lifetime, so toggling the button
+        repeatedly doesn't spam the user with the same dialog.
+        """
+        g = self.game
+        g.analysis_enabled = not g.analysis_enabled
+        if g.analysis_enabled:
+            g.launch_analysis(self.analysis_worker)
+            if not self.analysis_worker.engine_available and not g.analysis_missing_modal_shown:
+                g.analysis_missing_modal_shown = True
+                self.pending_analysis_missing_modal = True
+        else:
+            self.analysis_worker.cancel()
+            g.analysis_epoch = None
+            g.clear_analysis_display()
+
+    def _start_stockfish_download(self) -> None:
+        """Kick off (or retry) downloading Stockfish into the same
+        directory preferences.json and saved games already live in.
+        No-op while a download is already in flight."""
+        if self.stockfish_downloader.busy:
+            return
+        self.stockfish_download_status = 'downloading'
+        self.stockfish_download_error = None
+        install_dir = save_io.get_save_dir() / 'stockfish'
+        self.stockfish_downloader.start(install_dir)
+
+    def _poll_stockfish_download(self) -> None:
+        """Called every frame. Picks up a finished download (success or
+        failure) at most once, mirroring AnalysisWorker.take()'s
+        consume-once contract. On success: closes any currently-open
+        engine subprocess (it may be pointed at a now-stale or missing
+        path), points both Game.stockfish_path and the AnalysisWorker at
+        the freshly-downloaded binary, and persists the new path to
+        preferences immediately — the user shouldn't have to separately
+        "save" after downloading.
+        """
+        result = self.stockfish_downloader.take_result()
+        if result is None:
+            return
+        path, error = result
+        g = self.game
+        if error is not None:
+            self.stockfish_download_status = 'error'
+            self.stockfish_download_error = error
+            return
+
+        self.stockfish_download_status = 'done'
+        self.stockfish_download_error = None
+        assert path is not None
+        g.stockfish_path = path
+        # The old engine (if any) may be pointed at a different, possibly
+        # now-broken path; close it so the next analysis start re-opens
+        # fresh against the new binary rather than continuing to use a
+        # stale process or a worker that's permanently given up after an
+        # earlier failed popen_uci attempt.
+        self.analysis_worker.stop_engine()
+        self.analysis_worker.set_engine_path(path)
+        g.analysis_missing_modal_shown = False
+        self._persist_window_prefs()
+        if g.analysis_enabled:
+            g.launch_analysis(self.analysis_worker)
 
     def write_save(self) -> None:
         if self.game.adapter is None:
@@ -272,6 +371,7 @@ class App:
                     is_over = g.adapter.is_game_over
                     self.sounds.play_for_move_result(result, is_check=is_check, is_game_over=is_over)
                     self.write_save()
+                    self._restart_analysis_if_enabled()
                     if g.state == GameState.BOT and not g.adapter.promotion_pending:
                         self.launch_bot_move()
                     elif g.state == GameState.PVP and not g.adapter.promotion_pending and not is_over:
@@ -393,7 +493,7 @@ class App:
         """Save the fullscreen state to preferences."""
         g = self.game
         save_io.write_preferences(g.board_theme, g.arrow_theme, g.reduced_motion,
-                                  self._fullscreen)
+                                  self._fullscreen, g.stockfish_path)
 
     # ── Bootstrap entry point ───────────────────────────────────────────────
 
@@ -406,6 +506,7 @@ class App:
         finally:
             self.game.bot_worker.cancel()
             self.game.bot_worker.join(timeout=2.0)
+            self.analysis_worker.stop_engine()
 
     def _frame(self) -> None:
         dt = self.clock.tick(60)
@@ -427,6 +528,8 @@ class App:
             self._handle_event(event, mx, my)
 
         self._apply_bot_move()
+        self.game.poll_analysis(self.analysis_worker)
+        self._poll_stockfish_download()
         # Arm any pending board flip once the move slide has finished, then
         # advance any in-flight flip animation. The board rotates between
         # turns so each player sits at the bottom on their move.
@@ -450,6 +553,7 @@ class App:
         if event.type == pygame.QUIT:
             self.game.bot_worker.cancel()
             self.game.bot_worker.join(timeout=2.0)
+            self.analysis_worker.stop_engine()
             pygame.quit()
             sys.exit()
 
@@ -482,6 +586,10 @@ class App:
 
         if self.pending_corrupt_error is not None:
             self._handle_error_modal_event(event, mx, my)
+            return
+
+        if self.pending_analysis_missing_modal:
+            self._handle_analysis_missing_modal_event(event, mx, my)
             return
 
         if g.continue_new_overlay:
@@ -530,6 +638,9 @@ class App:
         if self.pending_corrupt_error is not None:
             self.pending_corrupt_error = None
             return True
+        if self.pending_analysis_missing_modal:
+            self.pending_analysis_missing_modal = False
+            return True
         if g.continue_new_overlay:
             g.continue_new_overlay = False
             g.pending_save_data = None
@@ -567,6 +678,10 @@ class App:
     def _handle_error_modal_event(self, event, mx, my) -> None:
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             self.pending_corrupt_error = None
+
+    def _handle_analysis_missing_modal_event(self, event, mx, my) -> None:
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            self.pending_analysis_missing_modal = False
 
     def _handle_continue_new_overlay_event(self, event, mx, my) -> None:
         g = self.game
@@ -761,6 +876,9 @@ class App:
                             break
                 if activated_key is None and self.pref_motion_rect and self.pref_motion_rect.collidepoint(mx, my):
                     activated_key = ('motion', None)
+                if (activated_key is None and self.pref_download_rect
+                        and self.pref_download_rect.collidepoint(mx, my)):
+                    activated_key = ('download_stockfish', None)
         else:
             for focusable in self.pref_focus.widgets:
                 if focusable.activated_by_key(event):
@@ -789,9 +907,12 @@ class App:
             if g.reduced_motion:
                 g.winner_alpha = 255
             changed = True
+        elif kind == 'download_stockfish':
+            self._start_stockfish_download()
+            return
         if changed:
             save_io.write_preferences(g.board_theme, g.arrow_theme, g.reduced_motion,
-                                      self._fullscreen)
+                                      self._fullscreen, g.stockfish_path)
 
     def _complete_promotion(self, piece_type) -> None:
         """Complete a pending promotion with the given piece type, whether
@@ -805,6 +926,7 @@ class App:
         promo_img = g.piece_imgs.get((piece_type, promo_piece_color))
         g.start_anim(g.adapter.anim_from, g.adapter.anim_to, promo_img)
         self.write_save()
+        self._restart_analysis_if_enabled()
         if g.state == GameState.BOT and g.adapter.turn != g.player_color:
             self.launch_bot_move()
         elif g.state == GameState.PVP and not g.adapter.is_game_over:
@@ -840,7 +962,9 @@ class App:
             # was swallowed by an overlay). The state is re-armed below only
             # if this press selects a piece.
             self._reset_drag()
-            if self.menu_btn_ingame_rect and self.menu_btn_ingame_rect.collidepoint(mx, my):
+            if self.analysis_toggle_rect and self.analysis_toggle_rect.collidepoint(mx, my):
+                self._toggle_analysis()
+            elif self.menu_btn_ingame_rect and self.menu_btn_ingame_rect.collidepoint(mx, my):
                 g.main_menu_overlay = True
             elif mx >= theme.PANEL_X:
                 if (self._live_btn_rect and self._live_btn_rect.collidepoint(mx, my)
@@ -888,6 +1012,7 @@ class App:
                             is_over = g.adapter.is_game_over
                             self.sounds.play_for_move_result(result, is_check=is_check, is_game_over=is_over)
                             self.write_save()
+                            self._restart_analysis_if_enabled()
                             if g.state == GameState.BOT and not g.adapter.promotion_pending:
                                 self.launch_bot_move()
                             elif g.state == GameState.PVP and not g.adapter.promotion_pending and not is_over:
@@ -955,6 +1080,7 @@ class App:
             is_over = g.adapter.is_game_over
             self.sounds.play_for_move_result(result, is_check=is_check, is_game_over=is_over)
             self.write_save()
+            self._restart_analysis_if_enabled()
 
     # ── Rendering ────────────────────────────────────────────────────────────
 
@@ -971,6 +1097,7 @@ class App:
         """
         g = self.game
         return (self.pending_corrupt_error is not None
+                or self.pending_analysis_missing_modal
                 or g.continue_new_overlay
                 or g.main_menu_overlay)
 
@@ -1033,8 +1160,13 @@ class App:
             self._draw_focus_ring(self.diff_focus)
         elif g.state == GameState.PREFERENCES:
             (self.pref_back_rect, self.pref_board_rects,
-             self.pref_arrow_rects, self.pref_motion_rect) = render_menus.draw_preferences(
-                self.screen, g.board_theme, g.arrow_theme, g.reduced_motion, self.fonts
+             self.pref_arrow_rects, self.pref_motion_rect,
+             self.pref_download_rect) = render_menus.draw_preferences(
+                self.screen, g.board_theme, g.arrow_theme, g.reduced_motion,
+                g.stockfish_path, self.fonts,
+                download_status=self.stockfish_download_status,
+                download_progress=self.stockfish_downloader.progress(),
+                download_error=self.stockfish_download_error,
             )
             pref_focusables = [FocusableRect(self.pref_back_rect, ('back', None))]
             pref_focusables += [
@@ -1066,6 +1198,12 @@ class App:
         if self.pending_corrupt_error is not None:
             render_overlays.draw_error_modal(
                 self.screen, theme.WIN_W, theme.WIN_H, self.pending_corrupt_error, self.fonts
+            )
+        if self.pending_analysis_missing_modal:
+            self.analysis_missing_ok_rect = render_overlays.draw_info_modal(
+                self.screen, theme.WIN_W, theme.WIN_H, 'Stockfish Not Found',
+                'Install Stockfish or set its path in Preferences to use analysis mode.',
+                self.fonts,
             )
 
     def _draw_anim_items(self, anim, now_ms: int) -> None:
@@ -1154,6 +1292,15 @@ class App:
                         self.screen.blit(img, rect)
         render_board.draw_labels(self.screen, g.board_flipped, self.fonts)
         render_arrows.draw_board_arrow_overlay(self.screen, g.all_arrows, g.arrow_theme, g.board_flipped)
+        if g.analysis_enabled:
+            # PV arrows are intentionally not drawn — analysis mode shows
+            # only the eval bar. The engine still computes and stores the
+            # PV in g.analysis_pv (Game.poll_analysis), so re-enabling the
+            # overlay later is a one-line change, not a re-plumb.
+            render_board.draw_eval_bar(
+                self.screen, g.analysis_eval, g.board_flipped,
+                g.analysis_is_mate, g.analysis_mate_in, self.fonts,
+            )
 
         self._history_ply_rects, self._live_btn_rect, g.panel_scroll = render_history.draw_history_panel(
             self.screen, theme.PANEL_X, theme.PANEL_W, theme.WIN_W, theme.WIN_H,
@@ -1172,6 +1319,25 @@ class App:
                           self.menu_btn_ingame_rect, 1, border_radius=6)
         mm_s = self.fonts.igmenu.render('\u2261  Menu', True, (210, 210, 210) if mm_hov else (140, 140, 140))
         self.screen.blit(mm_s, mm_s.get_rect(center=self.menu_btn_ingame_rect.center))
+
+        # Analysis toggle, immediately to the left of the Menu button.
+        an_btn_w, an_btn_h = 28, 18
+        self.analysis_toggle_rect = pygame.Rect(
+            self.menu_btn_ingame_rect.x - an_btn_w - 6, 2, an_btn_w, an_btn_h
+        )
+        an_hov = self.analysis_toggle_rect.collidepoint(mx_, my_)
+        if g.analysis_enabled:
+            an_bg = (58, 96, 58) if an_hov else (48, 82, 48)
+            an_brd = (110, 170, 100)
+            an_fg = (210, 240, 200)
+        else:
+            an_bg = (52, 52, 52) if an_hov else (42, 42, 42)
+            an_brd = (90, 90, 90) if an_hov else (62, 62, 62)
+            an_fg = (210, 210, 210) if an_hov else (140, 140, 140)
+        pygame.draw.rect(self.screen, an_bg, self.analysis_toggle_rect, border_radius=6)
+        pygame.draw.rect(self.screen, an_brd, self.analysis_toggle_rect, 1, border_radius=6)
+        an_s = self.fonts.igmenu.render('A', True, an_fg)
+        self.screen.blit(an_s, an_s.get_rect(center=self.analysis_toggle_rect.center))
 
         is_animating = g.anim is not None and g.anim.is_animating(now_ms)
         if g.adapter.promotion_pending and not is_animating:

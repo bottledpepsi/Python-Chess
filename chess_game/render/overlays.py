@@ -166,6 +166,52 @@ def draw_continue_new_overlay(screen, win_w, win_h, fonts):
     return cont_btn, new_btn
 
 
+def draw_info_modal(screen, win_w, win_h, title_text, message, fonts):
+    """Draw a generic informational modal with a custom title. Returns the
+    OK button rect.
+
+    Distinct from draw_error_modal (which hardcodes a "Could not load
+    save" title and red/error styling) — this is for non-error notices
+    like "Stockfish was not found", using neutral styling so it doesn't
+    read as something having gone catastrophically wrong.
+    """
+    ov = pygame.Surface((win_w, win_h), pygame.SRCALPHA)
+    ov.fill((0, 0, 0, 185))
+    screen.blit(ov, (0, 0))
+
+    box_w, box_h = 420, 200
+    box = pygame.Rect((win_w - box_w) // 2, (win_h - box_h) // 2, box_w, box_h)
+    pygame.draw.rect(screen, (30, 30, 30), box, border_radius=12)
+    pygame.draw.rect(screen, (66, 66, 66), box, 1, border_radius=12)
+
+    title = fonts.ov_title.render(title_text, True, (220, 220, 220))
+    screen.blit(title, title.get_rect(center=(box.centerx, box.y + 34)))
+
+    words = message.split(' ')
+    lines, cur = [], ''
+    for w in words:
+        trial = (cur + ' ' + w).strip()
+        if fonts.ov_sub.size(trial)[0] > box_w - 40:
+            lines.append(cur)
+            cur = w
+        else:
+            cur = trial
+    if cur:
+        lines.append(cur)
+    for i, line in enumerate(lines[:3]):
+        ls = fonts.ov_sub.render(line, True, (180, 180, 180))
+        screen.blit(ls, ls.get_rect(center=(box.centerx, box.y + 70 + i * 18)))
+
+    mx, my = pygame.mouse.get_pos()
+    ok_btn = pygame.Rect(box.centerx - 70, box.bottom - 56, 140, 38)
+    hov = ok_btn.collidepoint(mx, my)
+    pygame.draw.rect(screen, (55, 55, 55) if hov else (42, 42, 42), ok_btn, border_radius=8)
+    pygame.draw.rect(screen, (90, 90, 90), ok_btn, 1, border_radius=8)
+    lbl = fonts.ov_btn.render('OK', True, (220, 220, 220))
+    screen.blit(lbl, lbl.get_rect(center=ok_btn.center))
+    return ok_btn
+
+
 def draw_error_modal(screen, win_w, win_h, message, fonts):
     """Draw a generic user-facing error modal. Returns the OK button rect."""
     ov = pygame.Surface((win_w, win_h), pygame.SRCALPHA)

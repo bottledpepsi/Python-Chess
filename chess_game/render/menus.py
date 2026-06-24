@@ -27,6 +27,29 @@ from chess_game.theme import (
 )
 
 
+def _truncate_text_front(text, font, max_width):
+    """Truncate text to fit within max_width, ellipsising from the FRONT
+    ("…ish-x86-64-avx2") rather than the back. Used for filesystem paths,
+    where the distinguishing part (the filename, the final folder) is at
+    the end — truncating from the back would hide exactly the part the
+    user most needs to see, while two long paths from the same install
+    tend to share their prefix, not their tail.
+
+    Returns text unchanged if it already fits.
+    """
+    if font.size(text)[0] <= max_width:
+        return text
+    ellipsis = '\u2026'
+    # Binary-search-free linear shrink is fine here: this runs at most a
+    # few dozen iterations on a short string, once per frame the
+    # preferences screen is open, not in a hot path.
+    for start in range(1, len(text)):
+        candidate = ellipsis + text[start:]
+        if font.size(candidate)[0] <= max_width:
+            return candidate
+    return ellipsis
+
+
 def make_menu_buttons():
     from chess_game.widgets import Button
     cx, bw, bh, gap = WIN_W // 2, 280, 68, 18
@@ -279,13 +302,21 @@ _BOARD_THEME_CHOICES = ['white_green', 'white_blue', 'white_red', 'colorblind_sa
 _ARROW_THEME_CHOICES = ['blue', 'yellow', 'green', 'white', 'black']
 
 
-def draw_preferences(screen, current_board_theme, current_arrow_theme, reduced_motion, fonts):
-    """Returns (back_rect, board_rects, arrow_rects, motion_rect).
+def draw_preferences(screen, current_board_theme, current_arrow_theme, reduced_motion,
+                     stockfish_path, fonts, download_status=None, download_progress=None,
+                     download_error=None):
+    """Returns (back_rect, board_rects, arrow_rects, motion_rect, download_rect).
 
     Redesigned with a clean card-based layout: each preference group sits
     in its own rounded card with a heading, a one-line description, and a
     row of large swatches. The reduced-motion toggle is a proper pill
     switch rather than a checkbox.
+
+    download_status is one of None/'idle', 'downloading', 'done', 'error'
+    — drives the Stockfish download button's label and colour.
+    download_progress is a 0.0-1.0 fraction while downloading (None for
+    an indeterminate state, e.g. during extraction). download_error is
+    the message shown next to the button when status is 'error'.
     """
     screen.fill(MENU_BG)
     cx = WIN_W // 2
@@ -396,7 +427,87 @@ def draw_preferences(screen, current_board_theme, current_arrow_theme, reduced_m
     back_s = fonts.pick_s.render('\u2190 Back', True, MENU_TEXT_SUB)
     screen.blit(back_s, (18, 18))
 
-    return pygame.Rect(0, 0, 80, 36), board_rects, arrow_rects, motion_rect
+    # ── Stockfish Path card ────────────────────────────────────────────
+    # No text-input widget exists anywhere else in this codebase yet, so
+    # rather than build one from scratch for a single field, this card is
+    # informational for the path itself: it shows the path currently in
+    # effect (truncated to fit, never overflowing the card) and points
+    # the user at the preferences JSON file to edit it directly for a
+    # custom path. The "Download Stockfish" button covers the common
+    # case of not having Stockfish at all, without needing manual JSON
+    # editing or a terminal.
+    from chess_game import io as _io
+    sf_card = _section_card(
+        595, 150, 'Stockfish Engine',
+        'Used by Analysis mode. Download it below, or edit the preferences file for a custom path.',
+    )
+
+    label_s = fonts.btn_sub.render('Path:', True, MENU_TEXT_SUB)
+    label_x = sf_card.x + 20
+    screen.blit(label_s, (label_x, sf_card.y + 58))
+
+    current_display = stockfish_path if stockfish_path else 'stockfish (using PATH)'
+    # Truncate from the front with a leading ellipsis so the filename at
+    # the end (the part that actually distinguishes one binary from
+    # another) stays visible — a long install path differs mostly in its
+    # prefix, not its tail.
+    path_x = label_x + label_s.get_width() + 8
+    max_path_w = sf_card.right - 20 - path_x
+    path_text = _truncate_text_front(current_display, fonts.btn_sub, max_path_w)
+    path_s = fonts.btn_sub.render(path_text, True, MENU_TEXT)
+    screen.blit(path_s, (path_x, sf_card.y + 58))
+
+    try:
+        prefs_file = str(_io.get_save_dir() / _io.PREF_FILENAME)
+    except OSError:
+        prefs_file = _io.PREF_FILENAME
+    file_text = _truncate_text_front(prefs_file, fonts.btn_sub, sf_card.width - 40)
+    file_s = fonts.btn_sub.render(file_text, True, MENU_TEXT_SUB)
+    screen.blit(file_s, (sf_card.x + 20, sf_card.y + 76))
+
+    # ── Download button + status ───────────────────────────────────────
+    btn_w, btn_h = 200, 36
+    download_rect = pygame.Rect(sf_card.x + 20, sf_card.y + 102, btn_w, btn_h)
+    status = download_status or 'idle'
+    is_busy = status == 'downloading'
+    hov = download_rect.collidepoint(mx, my) and not is_busy
+
+    if is_busy:
+        btn_bg, btn_brd = (44, 56, 70), (70, 90, 115)
+    elif status == 'error':
+        btn_bg = (70, 48, 48) if hov else (56, 40, 40)
+        btn_brd = (140, 80, 80) if hov else (110, 65, 65)
+    elif status == 'done':
+        btn_bg = (46, 70, 50) if hov else (38, 58, 42)
+        btn_brd = (95, 150, 100) if hov else (75, 120, 80)
+    else:
+        btn_bg = (44, 44, 50) if hov else (36, 36, 42)
+        btn_brd = (90, 90, 98) if hov else (66, 66, 74)
+    pygame.draw.rect(screen, btn_bg, download_rect, border_radius=8)
+    pygame.draw.rect(screen, btn_brd, download_rect, 1, border_radius=8)
+
+    if status == 'downloading':
+        btn_label = (f'Downloading… {int(download_progress * 100)}%'
+                     if download_progress is not None else 'Downloading…')
+    elif status == 'error':
+        btn_label = 'Retry Download'
+    elif status == 'done':
+        btn_label = 'Downloaded \u2713'
+    else:
+        btn_label = 'Download Stockfish'
+    btn_s = fonts.btn_sub.render(btn_label, True, MENU_TEXT)
+    screen.blit(btn_s, btn_s.get_rect(center=download_rect.center))
+
+    if status == 'error' and download_error:
+        err_text = _truncate_text_front(download_error, fonts.btn_sub,
+                                        sf_card.right - 20 - (download_rect.right + 14))
+        err_s = fonts.btn_sub.render(err_text, True, (210, 130, 130))
+        screen.blit(err_s, (download_rect.right + 14, download_rect.centery - err_s.get_height() // 2))
+    elif status == 'done':
+        done_s = fonts.btn_sub.render('Path updated automatically.', True, MENU_TEXT_SUB)
+        screen.blit(done_s, (download_rect.right + 14, download_rect.centery - done_s.get_height() // 2))
+
+    return pygame.Rect(0, 0, 80, 36), board_rects, arrow_rects, motion_rect, download_rect
 
 
 def draw_main_menu_overlay(screen, fonts, panel_x):

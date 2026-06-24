@@ -50,6 +50,21 @@ class Game:
     board_theme: str = "white_green"
     arrow_theme: str = "blue"
     reduced_motion: bool = False
+    stockfish_path: str = ""
+
+    # Always-on engine analysis mode (eval bar + PV arrows). The worker
+    # itself lives on App (like bot_worker would, but analysis_worker owns
+    # a real subprocess so App constructs and tears it down explicitly).
+    analysis_enabled: bool = False
+    analysis_epoch: int | None = None
+    analysis_eval: int | None = None
+    analysis_pv: list = field(default_factory=list)
+    analysis_is_mate: bool = False
+    analysis_mate_in: int | None = None
+    # Set once per App lifetime the first time the user enables analysis
+    # and Stockfish turns out to be unavailable, so the "not found" modal
+    # only ever shows once rather than re-triggering on every toggle.
+    analysis_missing_modal_shown: bool = False
 
     # When set, a board-flip animation is in flight. The actual
     # `board_flipped` toggle happens at the animation midpoint (when the
@@ -98,6 +113,8 @@ class Game:
         self.pending_pvp_flip = False
         self.review.reset()
         self.panel_scroll = 0
+        self.analysis_epoch = None
+        self.clear_analysis_display()
 
     def launch_bot_move(self) -> None:
         bot_color = "black" if self.player_color == "white" else "white"
@@ -109,6 +126,40 @@ class Game:
         if self.bot_epoch is None:
             return None
         return self.bot_worker.take(self.bot_epoch)
+
+    def launch_analysis(self, analysis_worker) -> None:
+        """(Re)start engine analysis on the current position, if enabled.
+
+        Takes the worker explicitly rather than owning one itself — App
+        owns analysis_worker (it manages a real subprocess, so its
+        lifecycle is tied to App.run()'s try/finally, not to per-game
+        resets like start_game()).
+        """
+        if not self.analysis_enabled or self.adapter is None:
+            return
+        self.analysis_epoch = analysis_worker.start(self.adapter.board)
+
+    def poll_analysis(self, analysis_worker) -> None:
+        """Pull a ready analysis result (if any) under the current epoch
+        and store it on the Game. No-op while analysis is disabled."""
+        if not self.analysis_enabled or self.analysis_epoch is None:
+            return
+        result = analysis_worker.take(self.analysis_epoch)
+        if result is None:
+            return
+        eval_cp, pv, is_mate, mate_in = result
+        self.analysis_eval = eval_cp
+        self.analysis_pv = pv
+        self.analysis_is_mate = is_mate
+        self.analysis_mate_in = mate_in
+
+    def clear_analysis_display(self) -> None:
+        """Clear the last-shown eval/PV, e.g. when analysis is toggled off
+        so stale numbers don't linger on screen."""
+        self.analysis_eval = None
+        self.analysis_pv = []
+        self.analysis_is_mate = False
+        self.analysis_mate_in = None
 
     def resolve_board_view(self):
         """Return (board, check_sq, last_move, sel_sq, targets) for whichever

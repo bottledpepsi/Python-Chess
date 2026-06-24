@@ -76,6 +76,30 @@ def test_preferences_roundtrip(isolated_save_dir):
     assert prefs["arrow_theme"] == "yellow"
 
 
+def test_preferences_roundtrip_includes_stockfish_path(isolated_save_dir):
+    save_io.write_preferences("white_green", "blue", stockfish_path="/opt/homebrew/bin/stockfish")
+    prefs = save_io.read_preferences()
+    assert prefs["stockfish_path"] == "/opt/homebrew/bin/stockfish"
+
+
+def test_preferences_missing_stockfish_path_defaults_to_empty_string(isolated_save_dir):
+    """A preferences file written before stockfish_path existed must still
+    load cleanly, with the new field defaulting to "" (use PATH)."""
+    save_dir = save_io.get_save_dir()
+    legacy_payload = {
+        "version": 1,
+        "board_theme": "white_green",
+        "arrow_theme": "blue",
+        "reduced_motion": False,
+        "fullscreen": False,
+    }
+    (save_dir / save_io.PREF_FILENAME).write_text(json.dumps(legacy_payload))
+
+    prefs = save_io.read_preferences()
+    assert prefs["stockfish_path"] == ""
+    assert prefs["board_theme"] == "white_green"
+
+
 def test_legacy_csv_save_migration(isolated_save_dir):
     save_dir = save_io.get_save_dir()
     legacy_path = save_dir / save_io._LEGACY_SAVE_FILENAMES["bot"]
