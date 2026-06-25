@@ -10,6 +10,7 @@ hand-rolled stand-in.
 from __future__ import annotations
 
 import io
+import sys
 import tarfile
 import threading
 import urllib.error
@@ -115,8 +116,9 @@ def test_detect_platform_key_32bit_x86_unsupported(monkeypatch):
 # ── Archive extraction: both real-world layouts, both formats ──────────
 
 
-def test_extract_tar_flat_layout_and_find_binary(tmp_path):
+def test_extract_tar_flat_layout_and_find_binary(monkeypatch, tmp_path):
     """Binary sits at the archive root, no wrapping folder."""
+    monkeypatch.setattr("chess_game.stockfish_download.platform.system", lambda: "Linux")
     archive = tmp_path / "flat.tar"
     archive.write_bytes(_make_tar_bytes({
         "stockfish-ubuntu-x86-64": b"FAKE_BINARY" * 1000,
@@ -131,10 +133,11 @@ def test_extract_tar_flat_layout_and_find_binary(tmp_path):
     assert found.name == "stockfish-ubuntu-x86-64"
 
 
-def test_extract_tar_nested_layout_and_find_binary(tmp_path):
+def test_extract_tar_nested_layout_and_find_binary(monkeypatch, tmp_path):
     """Binary sits inside a wrapping 'stockfish/' folder — the more
     common real-world layout. _find_extracted_binary must not assume a
     fixed depth."""
+    monkeypatch.setattr("chess_game.stockfish_download.platform.system", lambda: "Linux")
     archive = tmp_path / "nested.tar"
     archive.write_bytes(_make_tar_bytes({
         "stockfish/stockfish-ubuntu-x86-64": b"FAKE_BINARY" * 1000,
@@ -167,9 +170,10 @@ def test_extract_zip_and_find_windows_exe(monkeypatch, tmp_path):
     assert found.name == "stockfish-windows-x86-64.exe"
 
 
-def test_find_binary_prefers_largest_match(tmp_path):
+def test_find_binary_prefers_largest_match(monkeypatch, tmp_path):
     """A stray file that happens to contain "stockfish" in its name (e.g.
     a changelog) must not be picked over the real, much larger binary."""
+    monkeypatch.setattr("chess_game.stockfish_download.platform.system", lambda: "Linux")
     archive = tmp_path / "mixed.tar"
     archive.write_bytes(_make_tar_bytes({
         "stockfish-notes.txt": b"small file mentioning stockfish",
@@ -184,7 +188,8 @@ def test_find_binary_prefers_largest_match(tmp_path):
     assert found.name == "stockfish-ubuntu-x86-64"
 
 
-def test_find_binary_returns_none_when_nothing_matches(tmp_path):
+def test_find_binary_returns_none_when_nothing_matches(monkeypatch, tmp_path):
+    monkeypatch.setattr("chess_game.stockfish_download.platform.system", lambda: "Linux")
     archive = tmp_path / "empty.tar"
     archive.write_bytes(_make_tar_bytes({"README.md": b"nothing relevant here"}))
     dest = tmp_path / "extracted"
@@ -294,7 +299,27 @@ def test_full_download_pipeline_succeeds(monkeypatch, tmp_path):
     assert error is None
     assert path is not None
     assert Path(path).exists()
-    assert Path(path).stat().st_mode & 0o111  # executable bit set
+
+    # Mocking platform.system() controls which branch the *code* takes
+    # (it decided to chmod, since it believes it isn't Windows), but it
+    # can't change what the *real, underlying* filesystem actually
+    # supports. Path.chmod() on a genuinely-Windows host has no POSIX
+    # rwx bits to set at all — st_mode there is a fixed synthesised
+    # value, not a reflection of what chmod was asked to do — so this
+    # assertion is only meaningful when the test is actually running on
+    # a POSIX host.
+    #
+    # sys.platform (not platform.system()) is what tells us that: the
+    # `platform` module is a process-wide singleton, so the monkeypatch
+    # above — which patches the attribute on that one shared module
+    # object — affects *any* code calling platform.system() for the rest
+    # of this test, including a fresh `import platform` right here. It
+    # would silently always read back "Linux", making the real-host
+    # check a no-op. sys.platform is a plain string set once at
+    # interpreter startup, not routed through the `platform` module at
+    # all, so it isn't touched by this (or any) platform.system() patch.
+    if sys.platform != "win32":
+        assert Path(path).stat().st_mode & 0o111  # executable bit set
 
 
 def test_double_start_does_not_spawn_a_second_download(monkeypatch, tmp_path):
