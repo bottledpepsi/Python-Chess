@@ -89,6 +89,23 @@ def _asset_url_for_current_platform() -> tuple[str, str]:
     return asset_name, f"{_RELEASE_BASE_URL}/{asset_name}"
 
 
+def _is_within_directory(dest_dir: Path, member_path: Path) -> bool:
+    """True iff member_path is dest_dir itself or a path strictly inside it.
+
+    Deliberately NOT a string-prefix check (`str(member_path).startswith(
+    str(dest_dir))`) — that comparison is bypassable by any sibling whose
+    name happens to share dest_dir's name as a prefix. For example, with
+    dest_dir=".../extracted", a traversal member resolving to
+    ".../extracted_evil/payload" would incorrectly pass: the *string*
+    ".../extracted_evil" does start with ".../extracted", even though it
+    is a completely different directory. Path.is_relative_to() (or the
+    equivalent manual walk on Python < 3.9, not needed here since this
+    project requires >=3.10) compares path *components*, so a sibling
+    directory can never satisfy it.
+    """
+    return member_path == dest_dir or member_path.is_relative_to(dest_dir)
+
+
 def _extract_archive(archive_path: Path, dest_dir: Path) -> None:
     """Extract a .zip or .tar archive. Raises on any path-traversal member
     (a malicious or corrupt archive trying to write outside dest_dir) —
@@ -101,7 +118,7 @@ def _extract_archive(archive_path: Path, dest_dir: Path) -> None:
         with zipfile.ZipFile(archive_path) as zf:
             for member_name in zf.namelist():
                 member_path = (dest_dir / member_name).resolve()
-                if not str(member_path).startswith(str(dest_dir)):
+                if not _is_within_directory(dest_dir, member_path):
                     raise ValueError(f"Unsafe path in archive: {member_name}")
             zf.extractall(dest_dir)
     else:
@@ -113,7 +130,7 @@ def _extract_archive(archive_path: Path, dest_dir: Path) -> None:
         with tarfile.open(archive_path) as tf:
             for tar_member in tf.getmembers():
                 member_path = (dest_dir / tar_member.name).resolve()
-                if not str(member_path).startswith(str(dest_dir)):
+                if not _is_within_directory(dest_dir, member_path):
                     raise ValueError(f"Unsafe path in archive: {tar_member.name}")
             try:
                 tf.extractall(dest_dir, filter="data")

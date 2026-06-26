@@ -24,6 +24,7 @@ from chess_game.stockfish_download import (
     UnsupportedPlatformError,
     _extract_archive,
     _find_extracted_binary,
+    _is_within_directory,
     detect_platform_key,
 )
 
@@ -226,6 +227,59 @@ def test_extract_zip_rejects_path_traversal(tmp_path):
     dest.mkdir()
     with pytest.raises(ValueError, match="Unsafe path"):
         _extract_archive(archive, dest)
+
+
+def test_is_within_directory_rejects_sibling_with_shared_name_prefix(tmp_path):
+    """A naive `str(member_path).startswith(str(dest_dir))` check is
+    bypassable: ".../extracted_evil" is a string-prefix match against
+    ".../extracted" even though it's a completely different directory.
+    _is_within_directory must compare path *components*, not strings, so
+    this sibling is correctly rejected while a true child is accepted."""
+    dest_dir = (tmp_path / "extracted").resolve()
+    dest_dir.mkdir()
+    sibling_evil = (tmp_path / "extracted_evil" / "payload").resolve()
+    real_child = (dest_dir / "stockfish" / "stockfish.exe").resolve()
+
+    assert not _is_within_directory(dest_dir, sibling_evil)
+    assert _is_within_directory(dest_dir, real_child)
+    assert _is_within_directory(dest_dir, dest_dir)
+
+
+def test_extract_tar_rejects_sibling_directory_name_prefix_bypass(tmp_path):
+    """A tar member whose resolved path lands in a sibling directory that
+    merely shares dest_dir's name as a string prefix (e.g. "extracted" vs
+    "extracted_evil") must still be rejected as a traversal attempt."""
+    archive = tmp_path / "evil.tar"
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tf:
+        # Resolves to tmp_path/"extracted_evil/payload" -- a sibling of
+        # dest_dir ("extracted") that shares its name as a string prefix.
+        info = tarfile.TarInfo(name="../extracted_evil/payload")
+        data = b"malicious"
+        info.size = len(data)
+        tf.addfile(info, io.BytesIO(data))
+    archive.write_bytes(buf.getvalue())
+
+    dest = tmp_path / "extracted"
+    dest.mkdir()
+    with pytest.raises(ValueError, match="Unsafe path"):
+        _extract_archive(archive, dest)
+    # And the sibling must never actually have been written to.
+    assert not (tmp_path / "extracted_evil").exists()
+
+
+def test_extract_zip_rejects_sibling_directory_name_prefix_bypass(tmp_path):
+    archive = tmp_path / "evil.zip"
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("../extracted_evil/payload", "malicious")
+    archive.write_bytes(buf.getvalue())
+
+    dest = tmp_path / "extracted"
+    dest.mkdir()
+    with pytest.raises(ValueError, match="Unsafe path"):
+        _extract_archive(archive, dest)
+    assert not (tmp_path / "extracted_evil").exists()
 
 
 def test_second_successful_download_overwrites_extract_dir(monkeypatch, tmp_path):
