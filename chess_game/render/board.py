@@ -141,26 +141,26 @@ EVAL_BAR_LABEL_GAP = 4
 # realistic label string is wider than the bar itself — see draw_eval_bar.
 EVAL_BAR_LABEL_X_OFFSET = 8
 
+# Exponential ease-out rate (per second) for the eval bar's fill height —
+# see Game.update_eval_bar_smoothing for the frame-rate-independent decay
+# formula that uses this. Larger = snappier (converges faster); smaller =
+# more sluggish. ~6.0 settles a full 0->1 swing in roughly half a second,
+# which reads as a fluid slide rather than an instant snap without ever
+# feeling laggy behind the position on screen. Tune this single constant
+# to taste; nothing else needs to change.
+EVAL_BAR_EASE_PER_SEC = 6.0
 
-def draw_eval_bar(screen, eval_cp, board_flipped, is_mate, mate_in, fonts):
-    """Draw the always-on-analysis eval bar in the left margin.
 
-    A thin vertical strip, BOARD_PX tall, split between a light ("White")
-    fill and a dark ("Black") fill at a point determined by eval_cp via a
-    sigmoid (see analysis._eval_to_ratio) so the bar moves visibly on small
-    advantages without ever fully pegging on large ones. Mate scores are
-    the one exception: those DO peg fully to whichever side is mating,
-    with a "M{n}" label instead of a decimal eval.
+def eval_target_ratio(eval_cp: int | None, is_mate: bool, mate_in: int | None) -> float:
+    """Pure function: map the latest analysis result to the eval bar's
+    *target* white-fill ratio (0..1), with no easing applied.
 
-    When board_flipped, the bar's geometry doesn't change (it isn't tied
-    to a square), but its fill orientation does: White's fill always
-    grows from whichever edge is visually "down" for White, so flipping
-    the board flips the bar to match, exactly like the rank labels do.
+    Factored out of draw_eval_bar so Game.update_eval_bar_smoothing can
+    compute the same target the renderer would, without the renderer and
+    the per-frame easing update needing to duplicate this logic or fight
+    over which one owns "the real" ratio.
     """
     from chess_game.analysis import _eval_to_ratio
-    from chess_game.theme import BOARD_PX, BOARD_Y, MENU_TEXT, PANEL_BDR
-
-    bar_rect = pygame.Rect(EVAL_BAR_X, BOARD_Y, EVAL_BAR_W, BOARD_PX)
 
     if is_mate:
         # Pegged fully to the mating side. mate_in > 0 means White mates;
@@ -174,13 +174,48 @@ def draw_eval_bar(screen, eval_cp, board_flipped, is_mate, mate_in, fonts):
         # ever be reached if analysis runs on a position that was already
         # game-over, which the app doesn't normally do.
         if mate_in is not None and mate_in > 0:
-            white_ratio = 1.0
-        elif mate_in is not None and mate_in < 0:
-            white_ratio = 0.0
-        else:
-            white_ratio = 0.5
-    else:
-        white_ratio = _eval_to_ratio(eval_cp if eval_cp is not None else 0)
+            return 1.0
+        if mate_in is not None and mate_in < 0:
+            return 0.0
+        return 0.5
+    return _eval_to_ratio(eval_cp if eval_cp is not None else 0)
+
+
+def draw_eval_bar(screen, eval_cp, board_flipped, is_mate, mate_in, fonts, display_ratio=None):
+    """Draw the always-on-analysis eval bar in the left margin.
+
+    A thin vertical strip, BOARD_PX tall, split between a light ("White")
+    fill and a dark ("Black") fill at a point determined by eval_cp via a
+    sigmoid (see analysis._eval_to_ratio / eval_target_ratio above) so the
+    bar moves visibly on small advantages without ever fully pegging on
+    large ones. Mate scores are the one exception: those DO peg fully to
+    whichever side is mating, with a "M{n}" label instead of a decimal
+    eval.
+
+    `display_ratio`, if given, is used for the bar's *fill height*
+    instead of recomputing the ratio fresh from eval_cp/is_mate/mate_in —
+    this is the eased value from Game.update_eval_bar_smoothing, so the
+    bar's height lags smoothly behind the true evaluation by a few frames
+    instead of snapping instantly on every new engine result. The numeric
+    label above the bar always reflects the real (un-eased) eval_cp /
+    mate_in, since the *number* should never lie about the position even
+    while the *bar* is still catching up to it visually. When
+    display_ratio is None (e.g. existing callers/tests that haven't
+    opted into smoothing), the un-eased target ratio is used for the fill
+    too, preserving the previous instant-snap behaviour exactly.
+
+    When board_flipped, the bar's geometry doesn't change (it isn't tied
+    to a square), but its fill orientation does: White's fill always
+    grows from whichever edge is visually "down" for White, so flipping
+    the board flips the bar to match, exactly like the rank labels do.
+    """
+    from chess_game.theme import BOARD_PX, BOARD_Y, MENU_TEXT, PANEL_BDR
+
+    bar_rect = pygame.Rect(EVAL_BAR_X, BOARD_Y, EVAL_BAR_W, BOARD_PX)
+
+    target_ratio = eval_target_ratio(eval_cp, is_mate, mate_in)
+    white_ratio = target_ratio if display_ratio is None else display_ratio
+    white_ratio = max(0.0, min(1.0, white_ratio))
 
     # white_ratio is "fraction of the bar that is White's". White's fill
     # grows from the bottom of the bar when the board is in its normal

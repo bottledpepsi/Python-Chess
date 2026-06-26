@@ -1,0 +1,1532 @@
+diff --git a/chess_game/app.py b/chess_game/app.py
+index 12fb752..27fedad 100644
+--- a/chess_game/app.py
++++ b/chess_game/app.py
+@@ -30,6 +30,7 @@ from chess_game.render import trays as render_trays
+ from chess_game.review import enter_review, exit_review, move_review
+ from chess_game.sound import SoundManager
+ from chess_game.state import GameState
++from chess_game.stockfish_bot_worker import MAX_ELO, MIN_ELO, StockfishBotWorker
+ from chess_game.stockfish_download import StockfishDownloader
+ from chess_game.widgets import FOCUS_RING, FocusableRect, FocusGroup
+ 
+@@ -59,6 +60,10 @@ class App:
+         arrow_theme = prefs.get('arrow_theme') or 'blue'
+         reduced_motion = bool(prefs.get('reduced_motion', False))
+         stockfish_path = prefs.get('stockfish_path') or ''
++        bot_engine_pref = prefs.get('bot_engine_pref') or 'native'
++        if bot_engine_pref not in ('native', 'stockfish'):
++            bot_engine_pref = 'native'
++        bot_elo = int(prefs.get('bot_elo') or 1500)
+         self._fullscreen = bool(prefs.get('fullscreen', False))
+         if board_theme not in theme.BOARD_THEMES:
+             board_theme = 'white_green'
+@@ -82,10 +87,14 @@ class App:
+         bot = ChessBot(max_depth=3, book_path=resource_path('data/book/gm2001.bin'))
+         worker = BotWorker(bot)
+         self.analysis_worker = AnalysisWorker(stockfish_path)
++        stockfish_worker = StockfishBotWorker(stockfish_path)
++        bot_elo = max(MIN_ELO, min(MAX_ELO, bot_elo))
+         self.game = Game(
+-            bot=bot, bot_worker=worker, board_theme=board_theme,
++            bot=bot, bot_worker=worker, stockfish_bot_worker=stockfish_worker,
++            board_theme=board_theme,
+             arrow_theme=arrow_theme, reduced_motion=reduced_motion,
+             stockfish_path=stockfish_path,
++            bot_engine_pref=bot_engine_pref, bot_elo=bot_elo,
+         )
+         self.game.piece_imgs = self.assets.piece_imgs
+ 
+@@ -109,11 +118,23 @@ class App:
+         self.diff_level = 5
+         self.diff_focus = FocusGroup([])
+ 
++        # Stockfish ELO sub-menu (GameState.STOCKFISH_DIFFICULTY) — same
++        # shape as the diff_* block above, kept separate rather than
++        # reusing it so switching engine preference mid-session can never
++        # leave one screen's drag state bleeding into the other's.
++        self.sf_diff_back: pygame.Rect | None = None
++        self.sf_diff_confirm_rect: pygame.Rect | None = None
++        self.sf_diff_slider_rect: pygame.Rect | None = None
++        self.sf_diff_slider_info: tuple | None = None
++        self.sf_diff_slider_dragging = False
++        self.sf_diff_focus = FocusGroup([])
++
+         self.pref_back_rect: pygame.Rect | None = None
+         self.pref_board_rects: dict = {}
+         self.pref_arrow_rects: dict = {}
+         self.pref_motion_rect: pygame.Rect | None = None
+         self.pref_download_rect: pygame.Rect | None = None
++        self.pref_engine_rects: dict = {}
+         self.pref_focus = FocusGroup([])
+ 
+         # Stockfish auto-download. status is one of 'idle'/'downloading'/
+@@ -193,6 +214,7 @@ class App:
+         else:
+             self.analysis_worker.cancel()
+             g.analysis_epoch = None
++            g.eval_bar_display_ratio = None
+             g.clear_analysis_display()
+ 
+     def _start_stockfish_download(self) -> None:
+@@ -493,7 +515,8 @@ class App:
+         """Save the fullscreen state to preferences."""
+         g = self.game
+         save_io.write_preferences(g.board_theme, g.arrow_theme, g.reduced_motion,
+-                                  self._fullscreen, g.stockfish_path)
++                                  self._fullscreen, g.stockfish_path,
++                                  g.bot_engine_pref, g.bot_elo)
+ 
+     # ── Bootstrap entry point ───────────────────────────────────────────────
+ 
+@@ -617,6 +640,8 @@ class App:
+             self._handle_color_pick_event(event, mx, my)
+         elif g.state == GameState.DIFFICULTY:
+             self._handle_difficulty_event(event, mx, my)
++        elif g.state == GameState.STOCKFISH_DIFFICULTY:
++            self._handle_stockfish_difficulty_event(event, mx, my)
+         elif g.state == GameState.PREFERENCES:
+             self._handle_preferences_event(event, mx, my)
+         elif g.state in (GameState.PVP, GameState.BOT):
+@@ -630,6 +655,7 @@ class App:
+             GameState.OPPONENT_PICK: self.opponent_focus,
+             GameState.COLOR_PICK: self.picker_focus,
+             GameState.DIFFICULTY: self.diff_focus,
++            GameState.STOCKFISH_DIFFICULTY: self.sf_diff_focus,
+             GameState.PREFERENCES: self.pref_focus,
+         }.get(state)
+ 
+@@ -660,6 +686,10 @@ class App:
+             self.diff_focus.clear()
+             g.state = GameState.COLOR_PICK
+             return True
++        if g.state == GameState.STOCKFISH_DIFFICULTY:
++            self.sf_diff_focus.clear()
++            g.state = GameState.COLOR_PICK
++            return True
+         if g.state == GameState.PREFERENCES:
+             self.pref_focus.clear()
+             g.state = GameState.MENU
+@@ -815,7 +845,10 @@ class App:
+             g.player_color = activated_key
+             g.board_flipped = (activated_key == 'black')
+             self.picker_focus.clear()
+-            g.state = GameState.DIFFICULTY
++            if g.bot_engine_pref == 'stockfish':
++                g.state = GameState.STOCKFISH_DIFFICULTY
++            else:
++                g.state = GameState.DIFFICULTY
+ 
+     def _handle_difficulty_event(self, event, mx, my) -> None:
+         g = self.game
+@@ -858,6 +891,48 @@ class App:
+         if g.player_color == 'black':
+             self.launch_bot_move()
+ 
++    def _handle_stockfish_difficulty_event(self, event, mx, my) -> None:
++        """ELO-slider equivalent of _handle_difficulty_event — same
++        click/drag/keyboard shapes, just reading/writing g.bot_elo over
++        [MIN_ELO, MAX_ELO] instead of g.bot_level over 1-10."""
++        g = self.game
++        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
++            if self.sf_diff_back and self.sf_diff_back.collidepoint(mx, my):
++                self.sf_diff_focus.clear()
++                g.state = GameState.COLOR_PICK
++            elif self.sf_diff_confirm_rect and self.sf_diff_confirm_rect.collidepoint(mx, my):
++                self._confirm_stockfish_difficulty()
++            elif self.sf_diff_slider_rect and self.sf_diff_slider_rect.collidepoint(mx, my):
++                self.sf_diff_slider_dragging = True
++                if self.sf_diff_slider_info:
++                    sl_x, sl_w, _ = self.sf_diff_slider_info
++                    t = max(0.0, min(1.0, (mx - sl_x) / sl_w))
++                    g.bot_elo = int(round(MIN_ELO + t * (MAX_ELO - MIN_ELO)))
++        elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
++            self.sf_diff_slider_dragging = False
++        elif event.type == pygame.MOUSEMOTION:
++            if self.sf_diff_slider_dragging and self.sf_diff_slider_info:
++                sl_x, sl_w, _ = self.sf_diff_slider_info
++                t = max(0.0, min(1.0, (mx - sl_x) / sl_w))
++                g.bot_elo = int(round(MIN_ELO + t * (MAX_ELO - MIN_ELO)))
++        else:
++            for focusable in self.sf_diff_focus.widgets:
++                if focusable.activated_by_key(event):
++                    if focusable.key == 'back':
++                        self.sf_diff_focus.clear()
++                        g.state = GameState.COLOR_PICK
++                    elif focusable.key == 'confirm':
++                        self._confirm_stockfish_difficulty()
++                    break
++
++    def _confirm_stockfish_difficulty(self) -> None:
++        g = self.game
++        self.sf_diff_focus.clear()
++        g.state = GameState.BOT
++        self.start_game()
++        if g.player_color == 'black':
++            self.launch_bot_move()
++
+     def _handle_preferences_event(self, event, mx, my) -> None:
+         g = self.game
+         activated_key = None
+@@ -879,6 +954,11 @@ class App:
+                 if (activated_key is None and self.pref_download_rect
+                         and self.pref_download_rect.collidepoint(mx, my)):
+                     activated_key = ('download_stockfish', None)
++                if activated_key is None:
++                    for engine_key, rect in self.pref_engine_rects.items():
++                        if rect.collidepoint(mx, my):
++                            activated_key = ('engine', engine_key)
++                            break
+         else:
+             for focusable in self.pref_focus.widgets:
+                 if focusable.activated_by_key(event):
+@@ -910,9 +990,14 @@ class App:
+         elif kind == 'download_stockfish':
+             self._start_stockfish_download()
+             return
++        elif kind == 'engine':
++            assert value is not None
++            g.bot_engine_pref = value
++            changed = True
+         if changed:
+             save_io.write_preferences(g.board_theme, g.arrow_theme, g.reduced_motion,
+-                                      self._fullscreen, g.stockfish_path)
++                                      self._fullscreen, g.stockfish_path,
++                                      g.bot_engine_pref, g.bot_elo)
+ 
+     def _complete_promotion(self, piece_type) -> None:
+         """Complete a pending promotion with the given piece type, whether
+@@ -1158,15 +1243,26 @@ class App:
+                 FocusableRect(self.diff_confirm_rect, 'confirm'),
+             ])
+             self._draw_focus_ring(self.diff_focus)
++        elif g.state == GameState.STOCKFISH_DIFFICULTY:
++            (self.sf_diff_back, self.sf_diff_confirm_rect,
++             self.sf_diff_slider_rect, self.sf_diff_slider_info) = render_menus.draw_stockfish_difficulty(
++                self.screen, g.bot_elo, self.fonts
++            )
++            self.sf_diff_focus.rebuild([
++                FocusableRect(self.sf_diff_back, 'back'),
++                FocusableRect(self.sf_diff_confirm_rect, 'confirm'),
++            ])
++            self._draw_focus_ring(self.sf_diff_focus)
+         elif g.state == GameState.PREFERENCES:
+             (self.pref_back_rect, self.pref_board_rects,
+              self.pref_arrow_rects, self.pref_motion_rect,
+-             self.pref_download_rect) = render_menus.draw_preferences(
++             self.pref_download_rect, self.pref_engine_rects) = render_menus.draw_preferences(
+                 self.screen, g.board_theme, g.arrow_theme, g.reduced_motion,
+                 g.stockfish_path, self.fonts,
+                 download_status=self.stockfish_download_status,
+                 download_progress=self.stockfish_downloader.progress(),
+                 download_error=self.stockfish_download_error,
++                bot_engine_pref=g.bot_engine_pref,
+             )
+             pref_focusables = [FocusableRect(self.pref_back_rect, ('back', None))]
+             pref_focusables += [
+@@ -1176,6 +1272,9 @@ class App:
+                 FocusableRect(rect, ('arrow', name)) for name, rect in self.pref_arrow_rects.items()
+             ]
+             pref_focusables.append(FocusableRect(self.pref_motion_rect, ('motion', None)))
++            pref_focusables += [
++                FocusableRect(rect, ('engine', name)) for name, rect in self.pref_engine_rects.items()
++            ]
+             self.pref_focus.rebuild(pref_focusables)
+             self._draw_focus_ring(self.pref_focus)
+         elif g.state in (GameState.PVP, GameState.BOT):
+@@ -1293,6 +1392,7 @@ class App:
+         render_board.draw_labels(self.screen, g.board_flipped, self.fonts)
+         render_arrows.draw_board_arrow_overlay(self.screen, g.all_arrows, g.arrow_theme, g.board_flipped)
+         if g.analysis_enabled:
++            g.update_eval_bar_smoothing(dt)
+             # PV arrows are intentionally not drawn — analysis mode shows
+             # only the eval bar. The engine still computes and stores the
+             # PV in g.analysis_pv (Game.poll_analysis), so re-enabling the
+@@ -1300,6 +1400,7 @@ class App:
+             render_board.draw_eval_bar(
+                 self.screen, g.analysis_eval, g.board_flipped,
+                 g.analysis_is_mate, g.analysis_mate_in, self.fonts,
++                display_ratio=g.eval_bar_display_ratio,
+             )
+ 
+         self._history_ply_rects, self._live_btn_rect, g.panel_scroll = render_history.draw_history_panel(
+diff --git a/chess_game/game.py b/chess_game/game.py
+index efd8967..d748217 100644
+--- a/chess_game/game.py
++++ b/chess_game/game.py
+@@ -1,6 +1,7 @@
+ """The Game dataclass — replaces ~35 module globals."""
+ from __future__ import annotations
+ 
++import math
+ from dataclasses import dataclass, field
+ 
+ import chess
+@@ -10,6 +11,7 @@ from chess_game.anim import AnimationState, FlipState, ReviewState
+ from chess_game.bot_worker import BotWorker
+ from chess_game.engine.bot import ChessBot
+ from chess_game.state import GameState
++from chess_game.stockfish_bot_worker import DEFAULT_ELO, StockfishBotWorker
+ 
+ 
+ @dataclass
+@@ -22,6 +24,11 @@ class Game:
+     """
+     bot: ChessBot
+     bot_worker: BotWorker
++    # Owns its own UCI subprocess for *playing* moves, distinct from
++    # App.analysis_worker which only ever evaluates. Constructed eagerly
++    # (mirrors bot_worker) but the subprocess itself is opened lazily on
++    # first use, same as AnalysisWorker.
++    stockfish_bot_worker: StockfishBotWorker = field(default_factory=StockfishBotWorker)
+ 
+     state: GameState = GameState.MENU
+     adapter: ChessAdapter | None = None
+@@ -36,6 +43,12 @@ class Game:
+     bot_level: int = 5
+     bot_epoch: int | None = None  # epoch returned by bot_worker.start()
+ 
++    # "native" -> chess_game.engine.bot.ChessBot via bot_worker (the
++    # original 1-10 alpha-beta engine). "stockfish" -> the external
++    # Stockfish binary via stockfish_bot_worker, strength-limited by ELO.
++    bot_engine_pref: str = "native"
++    bot_elo: int = DEFAULT_ELO
++
+     think_dots: int = 0
+     think_timer: float = 0.0
+ 
+@@ -66,6 +79,15 @@ class Game:
+     # only ever shows once rather than re-triggering on every toggle.
+     analysis_missing_modal_shown: bool = False
+ 
++    # The eval bar's *currently displayed* white-fill ratio, eased toward
++    # whatever analysis_eval/analysis_is_mate computes as the target each
++    # frame (see App._update_eval_bar_smoothing). None until the first
++    # analysis result arrives, at which point it snaps straight to that
++    # first value instead of easing in from a default — there's no
++    # meaningful "previous" position to animate from on the very first
++    # frame analysis becomes available.
++    eval_bar_display_ratio: float | None = None
++
+     # When set, a board-flip animation is in flight. The actual
+     # `board_flipped` toggle happens at the animation midpoint (when the
+     # board is squashed to zero width). Set by `start_flip()` after a PvP
+@@ -92,6 +114,8 @@ class Game:
+ 
+     @property
+     def bot_thinking(self) -> bool:
++        if self.bot_engine_pref == "stockfish":
++            return self.stockfish_bot_worker.thinking
+         return self.bot_worker.thinking
+ 
+     def start_game(self) -> None:
+@@ -99,6 +123,8 @@ class Game:
+         worker and clear the TT in the correct order)."""
+         self.bot_worker.cancel()
+         self.bot_worker.join(timeout=2.0)
++        self.stockfish_bot_worker.cancel()
++        self.stockfish_bot_worker.join(timeout=2.0)
+         self.bot.clear_tt()
+ 
+         self.adapter = ChessAdapter()
+@@ -114,17 +140,25 @@ class Game:
+         self.review.reset()
+         self.panel_scroll = 0
+         self.analysis_epoch = None
++        self.eval_bar_display_ratio = None
+         self.clear_analysis_display()
+ 
+     def launch_bot_move(self) -> None:
+         bot_color = "black" if self.player_color == "white" else "white"
+         assert self.adapter is not None
+-        self.bot_epoch = self.bot_worker.start(self.adapter.board, bot_color, self.bot_level)
++        if self.bot_engine_pref == "stockfish":
++            self.bot_epoch = self.stockfish_bot_worker.start(
++                self.adapter.board, bot_color, self.bot_elo
++            )
++        else:
++            self.bot_epoch = self.bot_worker.start(self.adapter.board, bot_color, self.bot_level)
+ 
+     def poll_bot_move(self) -> chess.Move | None:
+         """Return the bot's move if one is ready under the current epoch."""
+         if self.bot_epoch is None:
+             return None
++        if self.bot_engine_pref == "stockfish":
++            return self.stockfish_bot_worker.take(self.bot_epoch)
+         return self.bot_worker.take(self.bot_epoch)
+ 
+     def launch_analysis(self, analysis_worker) -> None:
+@@ -161,6 +195,38 @@ class Game:
+         self.analysis_is_mate = False
+         self.analysis_mate_in = None
+ 
++    def update_eval_bar_smoothing(self, dt_ms: int) -> None:
++        """Ease eval_bar_display_ratio toward the current target ratio.
++
++        Called once per frame from the render loop (App._render_game),
++        independent of whether a *new* analysis result actually arrived
++        that frame — the bar keeps easing toward the last known target
++        across multiple frames even if no new engine output has landed
++        yet, which is what makes the transition smooth rather than a
++        series of instant jumps every time take() happens to succeed.
++
++        See chess_game.render.board for the exponential-decay formula
++        and how to tune its speed.
++        """
++        from chess_game.render.board import EVAL_BAR_EASE_PER_SEC, eval_target_ratio
++
++        if not self.analysis_enabled:
++            return
++        target = eval_target_ratio(self.analysis_eval, self.analysis_is_mate, self.analysis_mate_in)
++        if self.eval_bar_display_ratio is None:
++            # First result of this game/position — snap rather than ease
++            # in from an arbitrary default.
++            self.eval_bar_display_ratio = target
++            return
++        # Exponential ease-out, frame-rate independent: the fraction of
++        # the remaining gap closed this frame depends only on dt, not on
++        # how many frames it took to get here, so a slow machine (big dt,
++        # few frames/sec) converges in the same wall-clock time as a fast
++        # one (small dt, many frames/sec).
++        dt_s = max(0.0, dt_ms) / 1000.0
++        alpha = 1.0 - math.exp(-EVAL_BAR_EASE_PER_SEC * dt_s)
++        self.eval_bar_display_ratio += (target - self.eval_bar_display_ratio) * alpha
++
+     def resolve_board_view(self):
+         """Return (board, check_sq, last_move, sel_sq, targets) for whichever
+         board should currently be drawn — review_board when in review mode,
+diff --git a/chess_game/io.py b/chess_game/io.py
+index f14e93c..fdcedee 100644
+--- a/chess_game/io.py
++++ b/chess_game/io.py
+@@ -95,7 +95,8 @@ def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+ 
+ 
+ def write_preferences(board_theme: str, arrow_theme: str, reduced_motion: bool = False,
+-                      fullscreen: bool = False, stockfish_path: str = "") -> None:
++                      fullscreen: bool = False, stockfish_path: str = "",
++                      bot_engine_pref: str = "native", bot_elo: int = 1500) -> None:
+     """Persist preferences atomically."""
+     logger = get_logger()
+     path = get_save_dir() / PREF_FILENAME
+@@ -106,6 +107,10 @@ def write_preferences(board_theme: str, arrow_theme: str, reduced_motion: bool =
+         "reduced_motion": reduced_motion,
+         "fullscreen": fullscreen,
+         "stockfish_path": stockfish_path,
++        # Which engine backs "Vs Bot": "native" (chess_game.engine.bot)
++        # or "stockfish" (external UCI binary, strength-limited by ELO).
++        "bot_engine_pref": bot_engine_pref,
++        "bot_elo": bot_elo,
+     }
+     try:
+         _atomic_write_json(path, payload)
+@@ -134,6 +139,12 @@ def read_preferences() -> dict[str, Any]:
+                 # Old preference files predate this field too; "" means
+                 # "use PATH / default" (see AnalysisWorker).
+                 "stockfish_path": str(payload.get("stockfish_path", "")),
++                # Old preference files predate these two as well, so
++                # default to the native engine at a mid-range ELO —
++                # matches StockfishBotWorker.DEFAULT_ELO without importing
++                # that module here just for one constant.
++                "bot_engine_pref": str(payload.get("bot_engine_pref", "native")),
++                "bot_elo": int(payload.get("bot_elo", 1500)),
+             }
+             logger.info("Preferences loaded <- %s | %s", path, prefs)
+             return prefs
+diff --git a/chess_game/render/board.py b/chess_game/render/board.py
+index 118f116..32d8cec 100644
+--- a/chess_game/render/board.py
++++ b/chess_game/render/board.py
+@@ -141,26 +141,26 @@ EVAL_BAR_LABEL_GAP = 4
+ # realistic label string is wider than the bar itself — see draw_eval_bar.
+ EVAL_BAR_LABEL_X_OFFSET = 8
+ 
+-
+-def draw_eval_bar(screen, eval_cp, board_flipped, is_mate, mate_in, fonts):
+-    """Draw the always-on-analysis eval bar in the left margin.
+-
+-    A thin vertical strip, BOARD_PX tall, split between a light ("White")
+-    fill and a dark ("Black") fill at a point determined by eval_cp via a
+-    sigmoid (see analysis._eval_to_ratio) so the bar moves visibly on small
+-    advantages without ever fully pegging on large ones. Mate scores are
+-    the one exception: those DO peg fully to whichever side is mating,
+-    with a "M{n}" label instead of a decimal eval.
+-
+-    When board_flipped, the bar's geometry doesn't change (it isn't tied
+-    to a square), but its fill orientation does: White's fill always
+-    grows from whichever edge is visually "down" for White, so flipping
+-    the board flips the bar to match, exactly like the rank labels do.
++# Exponential ease-out rate (per second) for the eval bar's fill height —
++# see Game.update_eval_bar_smoothing for the frame-rate-independent decay
++# formula that uses this. Larger = snappier (converges faster); smaller =
++# more sluggish. ~6.0 settles a full 0->1 swing in roughly half a second,
++# which reads as a fluid slide rather than an instant snap without ever
++# feeling laggy behind the position on screen. Tune this single constant
++# to taste; nothing else needs to change.
++EVAL_BAR_EASE_PER_SEC = 6.0
++
++
++def eval_target_ratio(eval_cp: int | None, is_mate: bool, mate_in: int | None) -> float:
++    """Pure function: map the latest analysis result to the eval bar's
++    *target* white-fill ratio (0..1), with no easing applied.
++
++    Factored out of draw_eval_bar so Game.update_eval_bar_smoothing can
++    compute the same target the renderer would, without the renderer and
++    the per-frame easing update needing to duplicate this logic or fight
++    over which one owns "the real" ratio.
+     """
+     from chess_game.analysis import _eval_to_ratio
+-    from chess_game.theme import BOARD_PX, BOARD_Y, MENU_TEXT, PANEL_BDR
+-
+-    bar_rect = pygame.Rect(EVAL_BAR_X, BOARD_Y, EVAL_BAR_W, BOARD_PX)
+ 
+     if is_mate:
+         # Pegged fully to the mating side. mate_in > 0 means White mates;
+@@ -174,13 +174,48 @@ def draw_eval_bar(screen, eval_cp, board_flipped, is_mate, mate_in, fonts):
+         # ever be reached if analysis runs on a position that was already
+         # game-over, which the app doesn't normally do.
+         if mate_in is not None and mate_in > 0:
+-            white_ratio = 1.0
+-        elif mate_in is not None and mate_in < 0:
+-            white_ratio = 0.0
+-        else:
+-            white_ratio = 0.5
+-    else:
+-        white_ratio = _eval_to_ratio(eval_cp if eval_cp is not None else 0)
++            return 1.0
++        if mate_in is not None and mate_in < 0:
++            return 0.0
++        return 0.5
++    return _eval_to_ratio(eval_cp if eval_cp is not None else 0)
++
++
++def draw_eval_bar(screen, eval_cp, board_flipped, is_mate, mate_in, fonts, display_ratio=None):
++    """Draw the always-on-analysis eval bar in the left margin.
++
++    A thin vertical strip, BOARD_PX tall, split between a light ("White")
++    fill and a dark ("Black") fill at a point determined by eval_cp via a
++    sigmoid (see analysis._eval_to_ratio / eval_target_ratio above) so the
++    bar moves visibly on small advantages without ever fully pegging on
++    large ones. Mate scores are the one exception: those DO peg fully to
++    whichever side is mating, with a "M{n}" label instead of a decimal
++    eval.
++
++    `display_ratio`, if given, is used for the bar's *fill height*
++    instead of recomputing the ratio fresh from eval_cp/is_mate/mate_in —
++    this is the eased value from Game.update_eval_bar_smoothing, so the
++    bar's height lags smoothly behind the true evaluation by a few frames
++    instead of snapping instantly on every new engine result. The numeric
++    label above the bar always reflects the real (un-eased) eval_cp /
++    mate_in, since the *number* should never lie about the position even
++    while the *bar* is still catching up to it visually. When
++    display_ratio is None (e.g. existing callers/tests that haven't
++    opted into smoothing), the un-eased target ratio is used for the fill
++    too, preserving the previous instant-snap behaviour exactly.
++
++    When board_flipped, the bar's geometry doesn't change (it isn't tied
++    to a square), but its fill orientation does: White's fill always
++    grows from whichever edge is visually "down" for White, so flipping
++    the board flips the bar to match, exactly like the rank labels do.
++    """
++    from chess_game.theme import BOARD_PX, BOARD_Y, MENU_TEXT, PANEL_BDR
++
++    bar_rect = pygame.Rect(EVAL_BAR_X, BOARD_Y, EVAL_BAR_W, BOARD_PX)
++
++    target_ratio = eval_target_ratio(eval_cp, is_mate, mate_in)
++    white_ratio = target_ratio if display_ratio is None else display_ratio
++    white_ratio = max(0.0, min(1.0, white_ratio))
+ 
+     # white_ratio is "fraction of the bar that is White's". White's fill
+     # grows from the bottom of the bar when the board is in its normal
+diff --git a/chess_game/render/menus.py b/chess_game/render/menus.py
+index 11993b7..c895272 100644
+--- a/chess_game/render/menus.py
++++ b/chess_game/render/menus.py
+@@ -8,6 +8,7 @@ from __future__ import annotations
+ import pygame
+ 
+ from chess_game.engine.bot import DIFFICULTY_CONFIG
++from chess_game.stockfish_bot_worker import MAX_ELO, MIN_ELO
+ from chess_game.theme import (
+     ARROW_THEMES,
+     BOARD_THEMES,
+@@ -24,6 +25,7 @@ from chess_game.theme import (
+     WIN_H,
+     WIN_W,
+     difficulty_color,
++    elo_color,
+ )
+ 
+ 
+@@ -226,6 +228,35 @@ def _draw_slider_track(screen, value, vmin, vmax, sl_x, sl_w, sl_y, color, fonts
+     pygame.draw.circle(screen, color, (hx, sl_y), 12, 3)
+ 
+ 
++def _draw_elo_slider_track(screen, value, vmin, vmax, sl_x, sl_w, sl_y, color, fonts):
++    """Like _draw_slider_track, but for a ~1870-wide continuous ELO range
++    rather than a 1-10 discrete one.
++
++    _draw_slider_track draws one tick per integer step, which is fine for
++    10 steps but would draw nearly two thousand overlapping tick marks
++    here — so this variant draws only a handful of evenly-spaced ticks
++    (at vmin, the three quarter-points, and vmax) labelled with their
++    actual ELO value, while the fill/handle math is identical.
++    """
++    t = (value - vmin) / (vmax - vmin)
++    pygame.draw.rect(screen, (48, 48, 48), (sl_x, sl_y - 4, sl_w, 8), border_radius=4)
++    fill_w = max(8, int(sl_w * t))
++    pygame.draw.rect(screen, color, (sl_x, sl_y - 4, fill_w, 8), border_radius=4)
++
++    n_ticks = 4  # vmin, 1/4, 1/2, 3/4, vmax => 5 points, 4 intervals
++    for i in range(n_ticks + 1):
++        frac = i / n_ticks
++        tx = sl_x + int(sl_w * frac)
++        tick_val = int(round(vmin + (vmax - vmin) * frac))
++        pygame.draw.line(screen, (70, 70, 70), (tx, sl_y - 8), (tx, sl_y + 8), 1)
++        t_s = fonts.count.render(str(tick_val), True, (100, 100, 100))
++        screen.blit(t_s, t_s.get_rect(center=(tx, sl_y + 20)))
++
++    hx = sl_x + int(sl_w * t)
++    pygame.draw.circle(screen, (30, 30, 30), (hx, sl_y), 12)
++    pygame.draw.circle(screen, color, (hx, sl_y), 12, 3)
++
++
+ def draw_difficulty(screen, level, fonts):
+     """Single-slider difficulty selector.
+ 
+@@ -297,6 +328,112 @@ def draw_difficulty(screen, level, fonts):
+     )
+ 
+ 
++def _elo_tier_label(elo: int) -> str:
++    """Rough, human-readable skill band for a Stockfish ELO value —
++    purely descriptive flavour text, not used for any engine setting."""
++    if elo < 1400:
++        return "Beginner"
++    if elo < 1700:
++        return "Casual"
++    if elo < 2000:
++        return "Club Player"
++    if elo < 2300:
++        return "Expert"
++    if elo < 2600:
++        return "Master"
++    if elo < 2900:
++        return "Super GM"
++    return "Engine Strength"
++
++
++def draw_stockfish_difficulty(screen, elo, fonts):
++    """ELO slider selector shown instead of draw_difficulty when the
++    user's bot engine preference is "stockfish" (see
++    Game.bot_engine_pref / GameState.STOCKFISH_DIFFICULTY).
++
++    Mirrors draw_difficulty's layout almost exactly — same title
++    position, slider band, and confirm-button placement — so switching
++    between the two screens at runtime doesn't visually jolt the user,
++    but swaps the 1-10 level readout for a continuous ELO value and a
++    "Stockfish Selected" badge making clear which engine is about to
++    play.
++
++    Returns (back_rect, confirm_rect, slider_rect, slider_info) where
++    slider_info = (sl_x, sl_w, sl_y) for pixel-to-value conversion —
++    same shape as draw_difficulty's return value, so App can reuse one
++    slider-drag code path for both screens.
++    """
++    screen.fill(MENU_BG)
++    cx = WIN_W // 2
++    sl_x = cx - 190
++    sl_w = 380
++
++    col = elo_color(elo, MIN_ELO, MAX_ELO)
++    tier = _elo_tier_label(elo)
++
++    title_s = fonts.pick.render("Bot Difficulty", True, MENU_TEXT)
++    screen.blit(title_s, title_s.get_rect(center=(cx, 72)))
++
++    # "Stockfish Selected" badge — small pill just under the title so
++    # it's unmistakable which engine this screen is configuring,
++    # especially since the rest of the layout otherwise looks identical
++    # to the native-engine difficulty screen.
++    badge_text = "\u265e Stockfish Selected"
++    badge_s = fonts.diff_s.render(badge_text, True, (235, 235, 230))
++    badge_pad_x, badge_pad_y = 14, 6
++    badge_rect = pygame.Rect(0, 0, badge_s.get_width() + badge_pad_x * 2,
++                              badge_s.get_height() + badge_pad_y * 2)
++    badge_rect.center = (cx, 104)
++    pygame.draw.rect(screen, (46, 78, 46), badge_rect, border_radius=badge_rect.height // 2)
++    pygame.draw.rect(screen, (90, 150, 90), badge_rect, 1, border_radius=badge_rect.height // 2)
++    screen.blit(badge_s, badge_s.get_rect(center=badge_rect.center))
++
++    num_s = fonts.win.render(str(elo), True, col)
++    screen.blit(num_s, num_s.get_rect(center=(cx, 168)))
++
++    tier_s = fonts.diff_l.render(tier.upper(), True, col)
++    screen.blit(tier_s, tier_s.get_rect(center=(cx, 206)))
++
++    info_txt = f"UCI_LimitStrength enabled \u00b7 UCI_Elo {elo}"
++    info_s = fonts.diff_s.render(info_txt, True, MENU_TEXT_SUB)
++    screen.blit(info_s, info_s.get_rect(center=(cx, 230)))
++
++    pygame.draw.line(screen, (44, 44, 44), (sl_x, 254), (sl_x + sl_w, 254), 1)
++
++    sl_y = 288
++    _draw_elo_slider_track(screen, elo, MIN_ELO, MAX_ELO, sl_x, sl_w, sl_y, col, fonts)
++    slider_rect = pygame.Rect(sl_x - 14, sl_y - 18, sl_w + 28, 36)
++
++    desc_s = fonts.diff_s.render(
++        "Higher ELO plays closer to full strength; lower ELO blunders more often.",
++        True, (155, 155, 155),
++    )
++    screen.blit(desc_s, desc_s.get_rect(center=(cx, 336)))
++
++    pygame.draw.line(screen, (44, 44, 44), (sl_x, 360), (sl_x + sl_w, 360), 1)
++
++    bw, bh = 200, 48
++    btn = pygame.Rect(cx - bw // 2, 384, bw, bh)
++    mx_, my_ = pygame.mouse.get_pos()
++    hov = btn.collidepoint(mx_, my_)
++    bg_col = tuple(min(255, int(c * (0.38 if hov else 0.22))) for c in col)
++    pygame.draw.rect(screen, bg_col, btn, border_radius=10)
++    brd_col = col if hov else tuple(int(c * 0.55) for c in col)
++    pygame.draw.rect(screen, brd_col, btn, 2 if hov else 1, border_radius=10)
++    btn_lbl = fonts.btn.render("Start Game", True, MENU_TEXT)
++    screen.blit(btn_lbl, btn_lbl.get_rect(center=btn.center))
++
++    back_s = fonts.pick_s.render("\u2190 Back", True, MENU_TEXT_SUB)
++    screen.blit(back_s, (18, 18))
++
++    return (
++        pygame.Rect(0, 0, 80, 36),
++        btn,
++        slider_rect,
++        (sl_x, sl_w, sl_y),
++    )
++
++
+ # colorblind_safe added as a selectable board theme option.
+ _BOARD_THEME_CHOICES = ['white_green', 'white_blue', 'white_red', 'colorblind_safe']
+ _ARROW_THEME_CHOICES = ['blue', 'yellow', 'green', 'white', 'black']
+@@ -304,8 +441,8 @@ _ARROW_THEME_CHOICES = ['blue', 'yellow', 'green', 'white', 'black']
+ 
+ def draw_preferences(screen, current_board_theme, current_arrow_theme, reduced_motion,
+                      stockfish_path, fonts, download_status=None, download_progress=None,
+-                     download_error=None):
+-    """Returns (back_rect, board_rects, arrow_rects, motion_rect, download_rect).
++                     download_error=None, bot_engine_pref="native"):
++    """Returns (back_rect, board_rects, arrow_rects, motion_rect, download_rect, engine_rects).
+ 
+     Redesigned with a clean card-based layout: each preference group sits
+     in its own rounded card with a heading, a one-line description, and a
+@@ -317,6 +454,10 @@ def draw_preferences(screen, current_board_theme, current_arrow_theme, reduced_m
+     download_progress is a 0.0-1.0 fraction while downloading (None for
+     an indeterminate state, e.g. during extraction). download_error is
+     the message shown next to the button when status is 'error'.
++
++    bot_engine_pref is "native" or "stockfish" — which engine "Vs Bot"
++    will use; engine_rects is {"native": Rect, "stockfish": Rect} for the
++    two segments of that card's choice control.
+     """
+     screen.fill(MENU_BG)
+     cx = WIN_W // 2
+@@ -341,7 +482,7 @@ def draw_preferences(screen, current_board_theme, current_arrow_theme, reduced_m
+         return rect
+ 
+     # ── Board Theme card ───────────────────────────────────────────────
+-    board_card = _section_card(120, 155, 'Board Theme', 'Choose the colour scheme for the squares.')
++    board_card = _section_card(120, 140, 'Board Theme', 'Choose the colour scheme for the squares.')
+     board_rects = {}
+     swatch_w, swatch_h = 110, 56
+     swatch_gap = 12
+@@ -375,7 +516,7 @@ def draw_preferences(screen, current_board_theme, current_arrow_theme, reduced_m
+         board_rects[theme_name] = rect
+ 
+     # ── Arrow Theme card ───────────────────────────────────────────────
+-    arrow_card = _section_card(295, 155, 'Arrow Theme', 'Colour used for right-click annotation arrows.')
++    arrow_card = _section_card(268, 140, 'Arrow Theme', 'Colour used for right-click annotation arrows.')
+     arrow_rects = {}
+     n_arrows = len(_ARROW_THEME_CHOICES)
+     a_w, a_h = 90, 56
+@@ -406,7 +547,7 @@ def draw_preferences(screen, current_board_theme, current_arrow_theme, reduced_m
+         arrow_rects[theme_name] = rect
+ 
+     # ── Reduced Motion card ────────────────────────────────────────────
+-    motion_card = _section_card(470, 110, 'Reduced Motion', 'Skip piece-slide and board-flip animations.')
++    motion_card = _section_card(416, 88, 'Reduced Motion', 'Skip piece-slide and board-flip animations.')
+     # Pill-style toggle switch on the right side of the card.
+     pill_w, pill_h = 64, 30
+     motion_rect = pygame.Rect(motion_card.right - pill_w - 24, motion_card.y + 50, pill_w, pill_h)
+@@ -427,6 +568,30 @@ def draw_preferences(screen, current_board_theme, current_arrow_theme, reduced_m
+     back_s = fonts.pick_s.render('\u2190 Back', True, MENU_TEXT_SUB)
+     screen.blit(back_s, (18, 18))
+ 
++    # ── Bot Engine card ────────────────────────────────────────────────
++    engine_card = _section_card(
++        512, 88, 'Bot Engine',
++        'Choose which engine "Vs Bot" plays against.',
++    )
++    engine_rects = {}
++    seg_w, seg_h = 150, 36
++    seg_gap = 10
++    total_seg_w = seg_w * 2 + seg_gap
++    seg_x0 = engine_card.right - 20 - total_seg_w
++    seg_y = engine_card.y + 46
++    for i, (key, label) in enumerate((('native', 'Native'), ('stockfish', 'Stockfish'))):
++        rect = pygame.Rect(seg_x0 + i * (seg_w + seg_gap), seg_y, seg_w, seg_h)
++        hov = rect.collidepoint(mx, my)
++        selected = (bot_engine_pref == key)
++        bg = MENU_ACCENT if selected else ((44, 44, 50) if hov else (36, 36, 42))
++        brd = MENU_ACCENT_BRIGHT if selected else ((90, 90, 98) if hov else (66, 66, 74))
++        pygame.draw.rect(screen, bg, rect, border_radius=8)
++        pygame.draw.rect(screen, brd, rect, 2 if selected else 1, border_radius=8)
++        lbl_col = MENU_TEXT if selected else MENU_TEXT_SUB
++        lbl_s = fonts.btn_sub.render(label, True, lbl_col)
++        screen.blit(lbl_s, lbl_s.get_rect(center=rect.center))
++        engine_rects[key] = rect
++
+     # ── Stockfish Path card ────────────────────────────────────────────
+     # No text-input widget exists anywhere else in this codebase yet, so
+     # rather than build one from scratch for a single field, this card is
+@@ -436,10 +601,16 @@ def draw_preferences(screen, current_board_theme, current_arrow_theme, reduced_m
+     # custom path. The "Download Stockfish" button covers the common
+     # case of not having Stockfish at all, without needing manual JSON
+     # editing or a terminal.
++    #
++    # NOTE: this binary is shared by both Analysis mode (AnalysisWorker)
++    # and a "stockfish" Bot Engine choice (StockfishBotWorker) above —
++    # there's only one path preference, not two, since it's the same
++    # executable either way.
+     from chess_game import io as _io
+     sf_card = _section_card(
+-        595, 150, 'Stockfish Engine',
+-        'Used by Analysis mode. Download it below, or edit the preferences file for a custom path.',
++        608, 150, 'Stockfish Engine',
++        'Used by Analysis mode and the Stockfish bot engine. Download it below, '
++        'or edit the preferences file for a custom path.',
+     )
+ 
+     label_s = fonts.btn_sub.render('Path:', True, MENU_TEXT_SUB)
+@@ -507,7 +678,7 @@ def draw_preferences(screen, current_board_theme, current_arrow_theme, reduced_m
+         done_s = fonts.btn_sub.render('Path updated automatically.', True, MENU_TEXT_SUB)
+         screen.blit(done_s, (download_rect.right + 14, download_rect.centery - done_s.get_height() // 2))
+ 
+-    return pygame.Rect(0, 0, 80, 36), board_rects, arrow_rects, motion_rect, download_rect
++    return pygame.Rect(0, 0, 80, 36), board_rects, arrow_rects, motion_rect, download_rect, engine_rects
+ 
+ 
+ def draw_main_menu_overlay(screen, fonts, panel_x):
+diff --git a/chess_game/state.py b/chess_game/state.py
+index 86dbca9..3d55d84 100644
+--- a/chess_game/state.py
++++ b/chess_game/state.py
+@@ -9,6 +9,10 @@ class GameState(enum.Enum):
+     OPPONENT_PICK = "opponent_pick"
+     COLOR_PICK = "color_pick"
+     DIFFICULTY = "difficulty"
++    # Stockfish-specific ELO-slider sub-menu, reached instead of DIFFICULTY
++    # when the user's bot engine preference is "stockfish" (see
++    # Game.bot_engine_pref / App._handle_color_pick_event).
++    STOCKFISH_DIFFICULTY = "stockfish_difficulty"
+     PREFERENCES = "preferences"
+     PVP = "pvp"
+     BOT = "bot"
+@@ -18,8 +22,12 @@ class GameState(enum.Enum):
+ _ALLOWED: dict[GameState, set[GameState]] = {
+     GameState.MENU: {GameState.OPPONENT_PICK, GameState.PREFERENCES},
+     GameState.OPPONENT_PICK: {GameState.MENU, GameState.PVP, GameState.COLOR_PICK},
+-    GameState.COLOR_PICK: {GameState.MENU, GameState.OPPONENT_PICK, GameState.DIFFICULTY},
++    GameState.COLOR_PICK: {
++        GameState.MENU, GameState.OPPONENT_PICK,
++        GameState.DIFFICULTY, GameState.STOCKFISH_DIFFICULTY,
++    },
+     GameState.DIFFICULTY: {GameState.COLOR_PICK, GameState.BOT},
++    GameState.STOCKFISH_DIFFICULTY: {GameState.COLOR_PICK, GameState.BOT},
+     GameState.PREFERENCES: {GameState.MENU},
+     GameState.PVP: {GameState.MENU},
+     GameState.BOT: {GameState.MENU},
+diff --git a/chess_game/stockfish_bot_worker.py b/chess_game/stockfish_bot_worker.py
+new file mode 100644
+index 0000000..2493d70
+--- /dev/null
++++ b/chess_game/stockfish_bot_worker.py
+@@ -0,0 +1,251 @@
++"""Cancellable, epoch-guarded Stockfish *play* worker.
++
++This is the playing counterpart to chess_game.analysis.AnalysisWorker: where
++AnalysisWorker streams an evaluation for the always-on eval bar,
++StockfishBotWorker is asked for a single best move at a user-selected ELO,
++exactly like chess_game.bot_worker.BotWorker does for the native ChessBot.
++
++It deliberately mirrors BotWorker's epoch/cancel contract (see that module's
++docstring) so App.poll_bot_move()-style code can treat "the active bot
++worker" as an interchangeable abstraction regardless of which engine is
++backing it: an abort Event, an epoch counter so a stale result is never
++applied to a fresh board, and join-before-spawn so at most one worker
++thread is ever alive.
++
++Strength is controlled via the standard UCI_LimitStrength / UCI_Elo
++options (see chess_game.analysis for the equivalent "is Stockfish even
++available" probing logic, which this module deliberately keeps separate
++from rather than sharing a subprocess with — analysis and play can be
++toggled independently and must not fight over one engine handle).
++"""
++from __future__ import annotations
++
++import threading
++
++import chess
++import chess.engine
++
++from chess_game.log import get_logger
++
++# Stockfish only accepts UCI_Elo within this range once UCI_LimitStrength is
++# enabled. Values are clamped to this window before being sent, so a caller
++# passing an out-of-range slider value (e.g. from a stale UI state) can never
++# produce a UCI protocol error.
++MIN_ELO = 1320
++MAX_ELO = 3190
++DEFAULT_ELO = 1500
++
++# Capped low so a low-ELO bot still "feels" fast; UCI_LimitStrength already
++# does most of the work of making it play worse, not slower.
++DEFAULT_MOVETIME_MS = 1000
++
++
++class StockfishBotWorker:
++    """Owns a single background Stockfish subprocess used to generate the
++    bot's moves (as opposed to AnalysisWorker, which only ever evaluates).
++
++    Like AnalysisWorker, Stockfish is treated as optional: if it can't be
++    launched, engine_available is False and get_move()/start() become
++    safe no-ops that never produce a result. Callers should fall back to
++    the native ChessBot (via BotWorker) when this is the case — App is
++    responsible for surfacing that fallback to the user.
++    """
++
++    def __init__(self, engine_path: str = "") -> None:
++        self._engine_path = engine_path or "stockfish"
++        self._engine: chess.engine.SimpleEngine | None = None
++        self.engine_available = True
++        self.missing_reason: str = ""
++        self._tried_open = False
++
++        self._thread: threading.Thread | None = None
++        self._cancel = threading.Event()
++        self._epoch = 0
++        self._lock = threading.Lock()
++        self._result: chess.Move | None = None
++        self._result_epoch: int | None = None
++        self._thinking = False
++
++        # The ELO + movetime currently configured on the live subprocess,
++        # so _ensure_engine() can skip resending setoption when nothing
++        # has changed since the last search.
++        self._configured_elo: int | None = None
++
++    @property
++    def thinking(self) -> bool:
++        return self._thinking
++
++    def set_engine_path(self, path: str) -> None:
++        """Update the configured engine path. Takes effect the next time
++        the engine is (re-)opened, e.g. after stop_engine() or on next
++        start() if it was never successfully opened."""
++        self._engine_path = path or "stockfish"
++
++    def _ensure_engine(self) -> bool:
++        """Lazily open the UCI engine. Returns True if usable.
++
++        Mirrors AnalysisWorker._ensure_engine()'s exception handling
++        exactly (see that method's comments for why TimeoutError is
++        caught ahead of the broader OSError clause), but is kept as a
++        separate implementation rather than shared code because the two
++        workers must never share a single engine subprocess — one plays
++        moves the user is bound by, the other only ever advises.
++        """
++        if self._engine is not None:
++            return True
++        if self._tried_open and not self.engine_available:
++            return False
++        self._tried_open = True
++        logger = get_logger()
++        try:
++            self._engine = chess.engine.SimpleEngine.popen_uci(self._engine_path)
++        except TimeoutError as exc:
++            self.engine_available = False
++            self.missing_reason = (
++                f"Timed out waiting for a UCI response from '{self._engine_path}' "
++                "(is this actually a chess engine?)"
++            )
++            logger.warning("Stockfish handshake timed out (%s): %s", self._engine_path, exc)
++            return False
++        except OSError as exc:
++            self.engine_available = False
++            self.missing_reason = str(exc) or f"Could not launch '{self._engine_path}'"
++            logger.warning("Stockfish unavailable (%s): %s", self._engine_path, exc)
++            return False
++        except chess.engine.EngineError as exc:
++            self.engine_available = False
++            self.missing_reason = str(exc) or f"'{self._engine_path}' did not initialise correctly"
++            logger.warning("Stockfish did not initialise (%s): %s", self._engine_path, exc)
++            return False
++        self.engine_available = True
++        self.missing_reason = ""
++        self._configured_elo = None  # force a fresh setoption on the new process
++        return True
++
++    def _configure_strength(self, elo: int) -> None:
++        """Send UCI_LimitStrength + UCI_Elo if they differ from what's
++        already configured on the live subprocess. Clamped to
++        [MIN_ELO, MAX_ELO] so a stale or out-of-range slider value can
++        never reach the engine as a protocol error."""
++        assert self._engine is not None
++        elo = max(MIN_ELO, min(MAX_ELO, int(elo)))
++        if elo == self._configured_elo:
++            return
++        self._engine.configure({
++            "UCI_LimitStrength": True,
++            "UCI_Elo": elo,
++        })
++        self._configured_elo = elo
++
++    def start(self, board: chess.Board, color: str, elo: int = DEFAULT_ELO,
++              movetime_ms: int = DEFAULT_MOVETIME_MS) -> int:
++        """Cancel any in-flight search, then start a new one in the
++        background. Returns the epoch assigned to this search; pass it
++        to take() later to retrieve the result only if it's still
++        current.
++
++        `color` is accepted (and unused beyond bookkeeping symmetry with
++        BotWorker.start()'s signature) since python-chess's engine.play
++        infers whose move it is directly from `board.turn` rather than
++        needing it passed explicitly.
++        """
++        logger = get_logger()
++        self.cancel()
++        self.join(timeout=2.0)
++
++        self._epoch += 1
++        epoch = self._epoch
++        self._cancel = threading.Event()
++        cancel_event = self._cancel
++        board_copy = board.copy()  # never share the live board with the thread
++        self._thinking = True
++
++        if not self._ensure_engine():
++            self._thinking = False
++            return epoch
++
++        engine = self._engine
++        assert engine is not None
++
++        def _run() -> None:
++            try:
++                self._configure_strength(elo)
++                limit = chess.engine.Limit(time=movetime_ms / 1000.0)
++                result = engine.play(board_copy, limit)
++            except chess.engine.EngineTerminatedError:
++                logger.warning("Stockfish process terminated during play")
++                with self._lock:
++                    self._thinking = False
++                return
++            except chess.engine.EngineError as exc:
++                logger.warning("Stockfish play() error (epoch %d): %s", epoch, exc)
++                with self._lock:
++                    self._thinking = False
++                return
++
++            if cancel_event.is_set():
++                # The move finished computing, but a newer search has
++                # already been requested (e.g. the game was restarted
++                # mid-think) — discard it rather than risk it being
++                # take()n under a now-stale epoch later.
++                logger.debug("Stockfish search aborted (epoch %d)", epoch)
++                with self._lock:
++                    self._thinking = False
++                return
++
++            with self._lock:
++                self._result = result.move
++                self._result_epoch = epoch
++                self._thinking = False
++
++        self._thread = threading.Thread(target=_run, daemon=True)
++        self._thread.start()
++        return epoch
++
++    def take(self, expected_epoch: int) -> chess.Move | None:
++        """Return the computed move only if it matches expected_epoch.
++
++        Stale results (computed under an old epoch) are dropped, never
++        applied — this is what makes restart-while-thinking safe.
++        """
++        with self._lock:
++            if self._result is not None and self._result_epoch == expected_epoch:
++                move = self._result
++                self._result = None
++                self._result_epoch = None
++                return move
++            return None
++
++    def current_epoch(self) -> int:
++        return self._epoch
++
++    def cancel(self) -> None:
++        # NOTE: unlike AnalysisWorker's analysis() stream, engine.play()
++        # offers no cooperative-cancel hook — once dispatched, the
++        # underlying `go` command runs to completion (bounded by
++        # movetime_ms) inside python-chess's blocking call. Setting this
++        # Event therefore can't interrupt an in-flight search early; it
++        # only marks the *result* as stale so a late-arriving move from a
++        # cancelled search is discarded in _run() / take() rather than
++        # ever being applied to a board it no longer matches. Bounding
++        # movetime_ms keeps "how late" bounded to roughly one search.
++        self._cancel.set()
++
++    def join(self, timeout: float | None = None) -> None:
++        if self._thread is not None and self._thread.is_alive():
++            self._thread.join(timeout=timeout)
++        self._thread = None
++
++    def stop_engine(self) -> None:
++        """Close the UCI engine subprocess. Idempotent; safe to call even
++        if the engine was never successfully opened."""
++        self.cancel()
++        self.join(timeout=2.0)
++        if self._engine is not None:
++            try:
++                self._engine.quit()
++            except chess.engine.EngineError:
++                pass
++            self._engine = None
++        self._tried_open = False
++        self._configured_elo = None
+diff --git a/chess_game/theme.py b/chess_game/theme.py
+index 2d9d718..21930ca 100644
+--- a/chess_game/theme.py
++++ b/chess_game/theme.py
+@@ -114,6 +114,24 @@ def difficulty_color(level: int) -> tuple[int, int, int]:
+     return _DIFFICULTY_COLORS[max(0, min(9, level - 1))]
+ 
+ 
++def elo_color(elo: int, vmin: int, vmax: int) -> tuple[int, int, int]:
++    """Return an accent colour for a Stockfish ELO value, interpolated
++    across the same green->red ramp as difficulty_color but continuously
++    (not in 10 discrete steps) since ELO spans a much wider, finer-grained
++    range than the native engine's 1-10 levels."""
++    span = max(1, vmax - vmin)
++    t = max(0.0, min(1.0, (elo - vmin) / span))
++    idx_f = t * (len(_DIFFICULTY_COLORS) - 1)
++    lo = int(idx_f)
++    hi = min(len(_DIFFICULTY_COLORS) - 1, lo + 1)
++    frac = idx_f - lo
++    c_lo, c_hi = _DIFFICULTY_COLORS[lo], _DIFFICULTY_COLORS[hi]
++    r = int(c_lo[0] + (c_hi[0] - c_lo[0]) * frac)
++    g = int(c_lo[1] + (c_hi[1] - c_lo[1]) * frac)
++    b = int(c_lo[2] + (c_hi[2] - c_lo[2]) * frac)
++    return (r, g, b)
++
++
+ DIFF_TIER = {
+     1: 'Novice', 2: 'Novice',
+     3: 'Casual', 4: 'Casual',
+diff --git a/tests/test_game.py b/tests/test_game.py
+index 1198665..6ba4936 100644
+--- a/tests/test_game.py
++++ b/tests/test_game.py
+@@ -55,3 +55,121 @@ def test_launch_bot_move_uses_opposite_color():
+     assert move is not None
+     # Black's first reply must be a legal black move on the starting board.
+     assert move in chess.Board().legal_moves
++
++
++def test_launch_bot_move_dispatches_to_stockfish_worker_when_preferred(monkeypatch):
++    """When bot_engine_pref == 'stockfish', launch_bot_move/poll_bot_move
++    must go through stockfish_bot_worker, not the native bot_worker —
++    mocked the same way tests/test_stockfish_bot_worker.py mocks
++    SimpleEngine.popen_uci, so no real Stockfish binary is needed."""
++    import chess.engine
++
++    from chess_game.stockfish_bot_worker import StockfishBotWorker
++
++    class _FakePlayResult:
++        def __init__(self, move):
++            self.move = move
++
++    class _FakeEngine:
++        def configure(self, options):
++            pass
++
++        def play(self, board, limit, **kwargs):
++            return _FakePlayResult(chess.Move.from_uci("e2e4"))
++
++        def quit(self):
++            pass
++
++    monkeypatch.setattr(
++        chess.engine.SimpleEngine, "popen_uci",
++        staticmethod(lambda command, **kwargs: _FakeEngine()),
++    )
++
++    bot = ChessBot(book_path=None)
++    worker = BotWorker(bot)
++    sf_worker = StockfishBotWorker("/fake/stockfish")
++    g = Game(bot=bot, bot_worker=worker, stockfish_bot_worker=sf_worker)
++    g.start_game()
++    g.bot_engine_pref = "stockfish"
++    g.bot_elo = 2000
++    g.player_color = "white"
++
++    g.launch_bot_move()
++    sf_worker.join(timeout=2.0)
++
++    # The native worker must never have been asked to think.
++    assert worker.thinking is False
++    move = g.poll_bot_move()
++    assert move == chess.Move.from_uci("e2e4")
++
++
++# ── Eval bar smoothing ───────────────────────────────────────────────────────
++
++
++def test_eval_bar_snaps_to_first_result_instead_of_easing_from_default():
++    bot = ChessBot(book_path=None)
++    worker = BotWorker(bot)
++    g = Game(bot=bot, bot_worker=worker)
++    g.analysis_enabled = True
++    g.analysis_eval = 500  # +5.00 for White
++    assert g.eval_bar_display_ratio is None
++    g.update_eval_bar_smoothing(dt_ms=16)
++    assert g.eval_bar_display_ratio is not None
++    from chess_game.render.board import eval_target_ratio
++    target = eval_target_ratio(500, False, None)
++    assert g.eval_bar_display_ratio == target
++
++
++def test_eval_bar_eases_toward_target_without_overshoot():
++    bot = ChessBot(book_path=None)
++    worker = BotWorker(bot)
++    g = Game(bot=bot, bot_worker=worker)
++    g.analysis_enabled = True
++
++    g.analysis_eval = 0
++    g.update_eval_bar_smoothing(dt_ms=16)  # snaps to ~0.5
++    start_ratio = g.eval_bar_display_ratio
++
++    g.analysis_eval = 900  # big swing toward White
++    from chess_game.render.board import eval_target_ratio
++    target = eval_target_ratio(900, False, None)
++
++    prev = start_ratio
++    for _ in range(200):
++        g.update_eval_bar_smoothing(dt_ms=16)
++        # Monotonic approach: each step moves closer to the target and
++        # never overshoots past it.
++        assert prev <= g.eval_bar_display_ratio <= target + 1e-9
++        prev = g.eval_bar_display_ratio
++
++    # After ~3.2 seconds of frames it should have essentially converged.
++    assert abs(g.eval_bar_display_ratio - target) < 1e-3
++
++
++def test_eval_bar_smoothing_is_frame_rate_independent():
++    """Stepping with many small dt's vs one big dt covering the same
++    total elapsed time should converge to (almost) the same ratio."""
++    bot = ChessBot(book_path=None)
++    worker = BotWorker(bot)
++
++    g_fast = Game(bot=bot, bot_worker=worker)
++    g_fast.analysis_enabled = True
++    g_fast.analysis_eval = 0
++    g_fast.update_eval_bar_smoothing(dt_ms=16)
++    g_fast.analysis_eval = 800
++
++    g_slow = Game(bot=bot, bot_worker=worker)
++    g_slow.analysis_enabled = True
++    g_slow.analysis_eval = 0
++    g_slow.update_eval_bar_smoothing(dt_ms=16)
++    g_slow.analysis_eval = 800
++
++    total_ms = 500
++    # 60fps-equivalent: many small steps.
++    steps = total_ms // 16
++    for _ in range(steps):
++        g_fast.update_eval_bar_smoothing(dt_ms=16)
++    # One single big step covering the same wall-clock time.
++    g_slow.update_eval_bar_smoothing(dt_ms=steps * 16)
++
++    assert abs(g_fast.eval_bar_display_ratio - g_slow.eval_bar_display_ratio) < 0.01
+diff --git a/tests/test_render_smoke.py b/tests/test_render_smoke.py
+index a72b27c..93bf1c9 100644
+--- a/tests/test_render_smoke.py
++++ b/tests/test_render_smoke.py
+@@ -86,10 +86,20 @@ def test_draw_menus():
+     menus.draw_color_picker(screen, fonts, king_imgs)
+     for level in range(1, 11):
+         menus.draw_difficulty(screen, level, fonts)
+-    back_rect, board_rects, arrow_rects, motion_rect, download_rect = menus.draw_preferences(
++    for elo in (1320, 1500, 2200, 2800, 3190):
++        menus.draw_stockfish_difficulty(screen, elo, fonts)
++    (back_rect, board_rects, arrow_rects, motion_rect,
++     download_rect, engine_rects) = menus.draw_preferences(
+         screen, "white_green", "blue", False, "", fonts
+     )
+     assert download_rect is not None
++    assert set(engine_rects) == {"native", "stockfish"}
++
++    # Both engine-preference states render without error.
++    menus.draw_preferences(
++        screen, "white_green", "blue", False, "", fonts,
++        bot_engine_pref="stockfish",
++    )
+ 
+     # Every download_status branch, including a long error message that
+     # needs front-truncation to avoid overflowing the card, and a long
+diff --git a/tests/test_stockfish_bot_worker.py b/tests/test_stockfish_bot_worker.py
+new file mode 100644
+index 0000000..bcfd933
+--- /dev/null
++++ b/tests/test_stockfish_bot_worker.py
+@@ -0,0 +1,242 @@
++"""StockfishBotWorker tests: engine-availability handling, epoch guarding,
++and UCI_LimitStrength/UCI_Elo configuration (including clamping).
++
++Stockfish is not installed in CI, so every test mocks
++chess.engine.SimpleEngine.popen_uci to return a small fake engine instead
++of launching a real subprocess — mirrors tests/test_analysis.py's
++_FakeEngine pattern exactly, just with a play() method instead of
++analysis(), and a configure() that records what was sent so tests can
++assert on the exact UCI_Elo value without needing a real engine to
++verify it against.
++"""
++from __future__ import annotations
++
++import threading
++import time
++
++import chess
++import chess.engine
++
++from chess_game.stockfish_bot_worker import MAX_ELO, MIN_ELO, StockfishBotWorker
++
++
++class _FakePlayResult:
++    def __init__(self, move: chess.Move) -> None:
++        self.move = move
++
++
++class _FakeEngine:
++    """Stands in for chess.engine.SimpleEngine. Records every configure()
++    call (a list of the option dicts passed in, in order) so tests can
++    assert exactly what UCI_Elo was sent, and supports a block_after flag
++    so cancellation/restart races can be exercised the same way
++    test_analysis.py does for AnalysisWorker."""
++
++    def __init__(self, move: chess.Move | None = None, block_after: bool = False) -> None:
++        self._move = move if move is not None else chess.Move.from_uci("e2e4")
++        self._block_after = block_after
++        self._stopped = threading.Event()
++        self.configure_calls: list[dict] = []
++        self.quit_called = False
++
++    def configure(self, options: dict) -> None:
++        self.configure_calls.append(dict(options))
++
++    def play(self, board, limit, **kwargs) -> _FakePlayResult:
++        if self._block_after:
++            self._stopped.wait(timeout=5.0)
++        return _FakePlayResult(self._move)
++
++    def quit(self) -> None:
++        self.quit_called = True
++
++
++def _patch_popen_uci(monkeypatch, engine_or_exc):
++    def _fake_popen_uci(command, **kwargs):
++        if isinstance(engine_or_exc, BaseException):
++            raise engine_or_exc
++        return engine_or_exc
++
++    monkeypatch.setattr(chess.engine.SimpleEngine, "popen_uci", staticmethod(_fake_popen_uci))
++
++
++# ── Engine-unavailable handling ─────────────────────────────────────────────
++
++
++def test_engine_unavailable_sets_flag_and_reason(monkeypatch):
++    _patch_popen_uci(monkeypatch, FileNotFoundError("no such file"))
++    worker = StockfishBotWorker("/nonexistent/stockfish")
++    epoch = worker.start(chess.Board(), "white", elo=1500)
++    worker.join(timeout=2.0)
++    assert worker.engine_available is False
++    assert worker.missing_reason
++    assert worker.take(epoch) is None
++
++
++def test_engine_unavailable_does_not_retry_popen_every_start(monkeypatch):
++    calls = {"n": 0}
++
++    def _fake_popen_uci(command, **kwargs):
++        calls["n"] += 1
++        raise FileNotFoundError("no such file")
++
++    monkeypatch.setattr(chess.engine.SimpleEngine, "popen_uci", staticmethod(_fake_popen_uci))
++    worker = StockfishBotWorker("/nonexistent/stockfish")
++    worker.start(chess.Board(), "white", elo=1500)
++    worker.join(timeout=2.0)
++    worker.start(chess.Board(), "white", elo=1500)
++    worker.join(timeout=2.0)
++    assert calls["n"] == 1
++
++
++# ── Move retrieval / epoch guarding ─────────────────────────────────────────
++
++
++def test_take_returns_move_for_matching_epoch(monkeypatch):
++    fake_engine = _FakeEngine(move=chess.Move.from_uci("g1f3"))
++    _patch_popen_uci(monkeypatch, fake_engine)
++
++    worker = StockfishBotWorker("/fake/stockfish")
++    epoch = worker.start(chess.Board(), "black", elo=1800)
++    worker.join(timeout=2.0)
++
++    move = worker.take(epoch)
++    assert move == chess.Move.from_uci("g1f3")
++    # Consumed once — a second take() under the same epoch returns None.
++    assert worker.take(epoch) is None
++
++
++def test_take_with_wrong_epoch_returns_none(monkeypatch):
++    fake_engine = _FakeEngine()
++    _patch_popen_uci(monkeypatch, fake_engine)
++
++    worker = StockfishBotWorker("/fake/stockfish")
++    epoch = worker.start(chess.Board(), "white", elo=1500)
++    worker.join(timeout=2.0)
++    assert worker.take(epoch + 999) is None
++
++
++def test_restart_mid_think_never_applies_stale_move(monkeypatch):
++    """Mirrors test_bot_worker.py's restart-mid-think race test: a second
++    start() before the first search finishes must invalidate the first
++    search's epoch, even though python-chess's play() offers no
++    cooperative early-cancel (see StockfishBotWorker.cancel's docstring)."""
++    fake_engine = _FakeEngine(move=chess.Move.from_uci("e2e4"), block_after=True)
++    _patch_popen_uci(monkeypatch, fake_engine)
++
++    worker = StockfishBotWorker("/fake/stockfish")
++    epoch1 = worker.start(chess.Board(), "white", elo=1500)
++    time.sleep(0.05)
++
++    # Let the first (blocked) search's underlying play() return now, but
++    # under the *old* epoch — it should be discarded once epoch2 exists.
++    fake_engine._stopped.set()
++    fake_engine._block_after = False
++
++    epoch2 = worker.start(chess.Board(), "white", elo=2000)
++    worker.join(timeout=2.0)
++
++    assert worker.take(epoch1) is None, "stale epoch result leaked"
++    fresh = worker.take(epoch2)
++    assert fresh is not None
++
++
++def test_worker_thinking_flag_clears_after_completion(monkeypatch):
++    fake_engine = _FakeEngine()
++    _patch_popen_uci(monkeypatch, fake_engine)
++    worker = StockfishBotWorker("/fake/stockfish")
++    worker.start(chess.Board(), "white", elo=1500)
++    worker.join(timeout=2.0)
++    assert worker.thinking is False
++
++
++# ── UCI_LimitStrength / UCI_Elo configuration ───────────────────────────────
++
++
++def test_elo_is_sent_via_uci_limit_strength_and_uci_elo(monkeypatch):
++    fake_engine = _FakeEngine()
++    _patch_popen_uci(monkeypatch, fake_engine)
++
++    worker = StockfishBotWorker("/fake/stockfish")
++    worker.start(chess.Board(), "white", elo=2200)
++    worker.join(timeout=2.0)
++
++    assert fake_engine.configure_calls == [{"UCI_LimitStrength": True, "UCI_Elo": 2200}]
++
++
++def test_elo_above_max_is_clamped(monkeypatch):
++    fake_engine = _FakeEngine()
++    _patch_popen_uci(monkeypatch, fake_engine)
++
++    worker = StockfishBotWorker("/fake/stockfish")
++    worker.start(chess.Board(), "white", elo=999999)
++    worker.join(timeout=2.0)
++
++    assert fake_engine.configure_calls[-1]["UCI_Elo"] == MAX_ELO
++
++
++def test_elo_below_min_is_clamped(monkeypatch):
++    fake_engine = _FakeEngine()
++    _patch_popen_uci(monkeypatch, fake_engine)
++
++    worker = StockfishBotWorker("/fake/stockfish")
++    worker.start(chess.Board(), "white", elo=-50)
++    worker.join(timeout=2.0)
++
++    assert fake_engine.configure_calls[-1]["UCI_Elo"] == MIN_ELO
++
++
++def test_unchanged_elo_is_not_resent(monkeypatch):
++    """configure() should only be called again if the ELO actually
++    changed since the last search, to avoid spamming setoption on every
++    single move at a fixed difficulty."""
++    fake_engine = _FakeEngine()
++    _patch_popen_uci(monkeypatch, fake_engine)
++
++    worker = StockfishBotWorker("/fake/stockfish")
++    e1 = worker.start(chess.Board(), "white", elo=1500)
++    worker.join(timeout=2.0)
++    worker.take(e1)
++
++    e2 = worker.start(chess.Board(), "white", elo=1500)
++    worker.join(timeout=2.0)
++    worker.take(e2)
++
++    assert len(fake_engine.configure_calls) == 1
++
++
++def test_elo_change_between_searches_is_resent(monkeypatch):
++    fake_engine = _FakeEngine()
++    _patch_popen_uci(monkeypatch, fake_engine)
++
++    worker = StockfishBotWorker("/fake/stockfish")
++    e1 = worker.start(chess.Board(), "white", elo=1500)
++    worker.join(timeout=2.0)
++    worker.take(e1)
++
++    e2 = worker.start(chess.Board(), "white", elo=2500)
++    worker.join(timeout=2.0)
++    worker.take(e2)
++
++    assert [c["UCI_Elo"] for c in fake_engine.configure_calls] == [1500, 2500]
++
++
++# ── stop_engine ──────────────────────────────────────────────────────────────
++
++
++def test_stop_engine_is_idempotent_when_never_opened():
++    worker = StockfishBotWorker("/fake/stockfish")
++    worker.stop_engine()
++    worker.stop_engine()  # must not raise
++
++
++def test_stop_engine_quits_the_underlying_engine(monkeypatch):
++    fake_engine = _FakeEngine()
++    _patch_popen_uci(monkeypatch, fake_engine)
++
++    worker = StockfishBotWorker("/fake/stockfish")
++    worker.start(chess.Board(), "white", elo=1500)
++    worker.join(timeout=2.0)
++    worker.stop_engine()
++
++    assert fake_engine.quit_called is True

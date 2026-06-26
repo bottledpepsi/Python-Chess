@@ -8,6 +8,7 @@ from __future__ import annotations
 import pygame
 
 from chess_game.engine.bot import DIFFICULTY_CONFIG
+from chess_game.stockfish_bot_worker import MAX_ELO, MIN_ELO
 from chess_game.theme import (
     ARROW_THEMES,
     BOARD_THEMES,
@@ -24,6 +25,7 @@ from chess_game.theme import (
     WIN_H,
     WIN_W,
     difficulty_color,
+    elo_color,
 )
 
 
@@ -226,6 +228,35 @@ def _draw_slider_track(screen, value, vmin, vmax, sl_x, sl_w, sl_y, color, fonts
     pygame.draw.circle(screen, color, (hx, sl_y), 12, 3)
 
 
+def _draw_elo_slider_track(screen, value, vmin, vmax, sl_x, sl_w, sl_y, color, fonts):
+    """Like _draw_slider_track, but for a ~1870-wide continuous ELO range
+    rather than a 1-10 discrete one.
+
+    _draw_slider_track draws one tick per integer step, which is fine for
+    10 steps but would draw nearly two thousand overlapping tick marks
+    here — so this variant draws only a handful of evenly-spaced ticks
+    (at vmin, the three quarter-points, and vmax) labelled with their
+    actual ELO value, while the fill/handle math is identical.
+    """
+    t = (value - vmin) / (vmax - vmin)
+    pygame.draw.rect(screen, (48, 48, 48), (sl_x, sl_y - 4, sl_w, 8), border_radius=4)
+    fill_w = max(8, int(sl_w * t))
+    pygame.draw.rect(screen, color, (sl_x, sl_y - 4, fill_w, 8), border_radius=4)
+
+    n_ticks = 4  # vmin, 1/4, 1/2, 3/4, vmax => 5 points, 4 intervals
+    for i in range(n_ticks + 1):
+        frac = i / n_ticks
+        tx = sl_x + int(sl_w * frac)
+        tick_val = int(round(vmin + (vmax - vmin) * frac))
+        pygame.draw.line(screen, (70, 70, 70), (tx, sl_y - 8), (tx, sl_y + 8), 1)
+        t_s = fonts.count.render(str(tick_val), True, (100, 100, 100))
+        screen.blit(t_s, t_s.get_rect(center=(tx, sl_y + 20)))
+
+    hx = sl_x + int(sl_w * t)
+    pygame.draw.circle(screen, (30, 30, 30), (hx, sl_y), 12)
+    pygame.draw.circle(screen, color, (hx, sl_y), 12, 3)
+
+
 def draw_difficulty(screen, level, fonts):
     """Single-slider difficulty selector.
 
@@ -297,6 +328,112 @@ def draw_difficulty(screen, level, fonts):
     )
 
 
+def _elo_tier_label(elo: int) -> str:
+    """Rough, human-readable skill band for a Stockfish ELO value —
+    purely descriptive flavour text, not used for any engine setting."""
+    if elo < 1400:
+        return "Beginner"
+    if elo < 1700:
+        return "Casual"
+    if elo < 2000:
+        return "Club Player"
+    if elo < 2300:
+        return "Expert"
+    if elo < 2600:
+        return "Master"
+    if elo < 2900:
+        return "Super GM"
+    return "Engine Strength"
+
+
+def draw_stockfish_difficulty(screen, elo, fonts):
+    """ELO slider selector shown instead of draw_difficulty when the
+    user's bot engine preference is "stockfish" (see
+    Game.bot_engine_pref / GameState.STOCKFISH_DIFFICULTY).
+
+    Mirrors draw_difficulty's layout almost exactly — same title
+    position, slider band, and confirm-button placement — so switching
+    between the two screens at runtime doesn't visually jolt the user,
+    but swaps the 1-10 level readout for a continuous ELO value and a
+    "Stockfish Selected" badge making clear which engine is about to
+    play.
+
+    Returns (back_rect, confirm_rect, slider_rect, slider_info) where
+    slider_info = (sl_x, sl_w, sl_y) for pixel-to-value conversion —
+    same shape as draw_difficulty's return value, so App can reuse one
+    slider-drag code path for both screens.
+    """
+    screen.fill(MENU_BG)
+    cx = WIN_W // 2
+    sl_x = cx - 190
+    sl_w = 380
+
+    col = elo_color(elo, MIN_ELO, MAX_ELO)
+    tier = _elo_tier_label(elo)
+
+    title_s = fonts.pick.render("Bot Difficulty", True, MENU_TEXT)
+    screen.blit(title_s, title_s.get_rect(center=(cx, 72)))
+
+    # "Stockfish Selected" badge — small pill just under the title so
+    # it's unmistakable which engine this screen is configuring,
+    # especially since the rest of the layout otherwise looks identical
+    # to the native-engine difficulty screen.
+    badge_text = "\u265e Stockfish Selected"
+    badge_s = fonts.diff_s.render(badge_text, True, (235, 235, 230))
+    badge_pad_x, badge_pad_y = 14, 6
+    badge_rect = pygame.Rect(0, 0, badge_s.get_width() + badge_pad_x * 2,
+                              badge_s.get_height() + badge_pad_y * 2)
+    badge_rect.center = (cx, 104)
+    pygame.draw.rect(screen, (46, 78, 46), badge_rect, border_radius=badge_rect.height // 2)
+    pygame.draw.rect(screen, (90, 150, 90), badge_rect, 1, border_radius=badge_rect.height // 2)
+    screen.blit(badge_s, badge_s.get_rect(center=badge_rect.center))
+
+    num_s = fonts.win.render(str(elo), True, col)
+    screen.blit(num_s, num_s.get_rect(center=(cx, 168)))
+
+    tier_s = fonts.diff_l.render(tier.upper(), True, col)
+    screen.blit(tier_s, tier_s.get_rect(center=(cx, 206)))
+
+    info_txt = f"UCI_LimitStrength enabled \u00b7 UCI_Elo {elo}"
+    info_s = fonts.diff_s.render(info_txt, True, MENU_TEXT_SUB)
+    screen.blit(info_s, info_s.get_rect(center=(cx, 230)))
+
+    pygame.draw.line(screen, (44, 44, 44), (sl_x, 254), (sl_x + sl_w, 254), 1)
+
+    sl_y = 288
+    _draw_elo_slider_track(screen, elo, MIN_ELO, MAX_ELO, sl_x, sl_w, sl_y, col, fonts)
+    slider_rect = pygame.Rect(sl_x - 14, sl_y - 18, sl_w + 28, 36)
+
+    desc_s = fonts.diff_s.render(
+        "Higher ELO plays closer to full strength; lower ELO blunders more often.",
+        True, (155, 155, 155),
+    )
+    screen.blit(desc_s, desc_s.get_rect(center=(cx, 336)))
+
+    pygame.draw.line(screen, (44, 44, 44), (sl_x, 360), (sl_x + sl_w, 360), 1)
+
+    bw, bh = 200, 48
+    btn = pygame.Rect(cx - bw // 2, 384, bw, bh)
+    mx_, my_ = pygame.mouse.get_pos()
+    hov = btn.collidepoint(mx_, my_)
+    bg_col = tuple(min(255, int(c * (0.38 if hov else 0.22))) for c in col)
+    pygame.draw.rect(screen, bg_col, btn, border_radius=10)
+    brd_col = col if hov else tuple(int(c * 0.55) for c in col)
+    pygame.draw.rect(screen, brd_col, btn, 2 if hov else 1, border_radius=10)
+    btn_lbl = fonts.btn.render("Start Game", True, MENU_TEXT)
+    screen.blit(btn_lbl, btn_lbl.get_rect(center=btn.center))
+
+    back_s = fonts.pick_s.render("\u2190 Back", True, MENU_TEXT_SUB)
+    screen.blit(back_s, (18, 18))
+
+    return (
+        pygame.Rect(0, 0, 80, 36),
+        btn,
+        slider_rect,
+        (sl_x, sl_w, sl_y),
+    )
+
+
 # colorblind_safe added as a selectable board theme option.
 _BOARD_THEME_CHOICES = ['white_green', 'white_blue', 'white_red', 'colorblind_safe']
 _ARROW_THEME_CHOICES = ['blue', 'yellow', 'green', 'white', 'black']
@@ -304,8 +441,8 @@ _ARROW_THEME_CHOICES = ['blue', 'yellow', 'green', 'white', 'black']
 
 def draw_preferences(screen, current_board_theme, current_arrow_theme, reduced_motion,
                      stockfish_path, fonts, download_status=None, download_progress=None,
-                     download_error=None):
-    """Returns (back_rect, board_rects, arrow_rects, motion_rect, download_rect).
+                     download_error=None, bot_engine_pref="native"):
+    """Returns (back_rect, board_rects, arrow_rects, motion_rect, download_rect, engine_rects).
 
     Redesigned with a clean card-based layout: each preference group sits
     in its own rounded card with a heading, a one-line description, and a
@@ -317,6 +454,10 @@ def draw_preferences(screen, current_board_theme, current_arrow_theme, reduced_m
     download_progress is a 0.0-1.0 fraction while downloading (None for
     an indeterminate state, e.g. during extraction). download_error is
     the message shown next to the button when status is 'error'.
+
+    bot_engine_pref is "native" or "stockfish" — which engine "Vs Bot"
+    will use; engine_rects is {"native": Rect, "stockfish": Rect} for the
+    two segments of that card's choice control.
     """
     screen.fill(MENU_BG)
     cx = WIN_W // 2
@@ -341,7 +482,7 @@ def draw_preferences(screen, current_board_theme, current_arrow_theme, reduced_m
         return rect
 
     # ── Board Theme card ───────────────────────────────────────────────
-    board_card = _section_card(120, 155, 'Board Theme', 'Choose the colour scheme for the squares.')
+    board_card = _section_card(120, 140, 'Board Theme', 'Choose the colour scheme for the squares.')
     board_rects = {}
     swatch_w, swatch_h = 110, 56
     swatch_gap = 12
@@ -375,7 +516,7 @@ def draw_preferences(screen, current_board_theme, current_arrow_theme, reduced_m
         board_rects[theme_name] = rect
 
     # ── Arrow Theme card ───────────────────────────────────────────────
-    arrow_card = _section_card(295, 155, 'Arrow Theme', 'Colour used for right-click annotation arrows.')
+    arrow_card = _section_card(268, 140, 'Arrow Theme', 'Colour used for right-click annotation arrows.')
     arrow_rects = {}
     n_arrows = len(_ARROW_THEME_CHOICES)
     a_w, a_h = 90, 56
@@ -406,7 +547,7 @@ def draw_preferences(screen, current_board_theme, current_arrow_theme, reduced_m
         arrow_rects[theme_name] = rect
 
     # ── Reduced Motion card ────────────────────────────────────────────
-    motion_card = _section_card(470, 110, 'Reduced Motion', 'Skip piece-slide and board-flip animations.')
+    motion_card = _section_card(416, 88, 'Reduced Motion', 'Skip piece-slide and board-flip animations.')
     # Pill-style toggle switch on the right side of the card.
     pill_w, pill_h = 64, 30
     motion_rect = pygame.Rect(motion_card.right - pill_w - 24, motion_card.y + 50, pill_w, pill_h)
@@ -427,6 +568,30 @@ def draw_preferences(screen, current_board_theme, current_arrow_theme, reduced_m
     back_s = fonts.pick_s.render('\u2190 Back', True, MENU_TEXT_SUB)
     screen.blit(back_s, (18, 18))
 
+    # ── Bot Engine card ────────────────────────────────────────────────
+    engine_card = _section_card(
+        512, 88, 'Bot Engine',
+        'Choose which engine "Vs Bot" plays against.',
+    )
+    engine_rects = {}
+    seg_w, seg_h = 150, 36
+    seg_gap = 10
+    total_seg_w = seg_w * 2 + seg_gap
+    seg_x0 = engine_card.right - 20 - total_seg_w
+    seg_y = engine_card.y + 46
+    for i, (key, label) in enumerate((('native', 'Native'), ('stockfish', 'Stockfish'))):
+        rect = pygame.Rect(seg_x0 + i * (seg_w + seg_gap), seg_y, seg_w, seg_h)
+        hov = rect.collidepoint(mx, my)
+        selected = (bot_engine_pref == key)
+        bg = MENU_ACCENT if selected else ((44, 44, 50) if hov else (36, 36, 42))
+        brd = MENU_ACCENT_BRIGHT if selected else ((90, 90, 98) if hov else (66, 66, 74))
+        pygame.draw.rect(screen, bg, rect, border_radius=8)
+        pygame.draw.rect(screen, brd, rect, 2 if selected else 1, border_radius=8)
+        lbl_col = MENU_TEXT if selected else MENU_TEXT_SUB
+        lbl_s = fonts.btn_sub.render(label, True, lbl_col)
+        screen.blit(lbl_s, lbl_s.get_rect(center=rect.center))
+        engine_rects[key] = rect
+
     # ── Stockfish Path card ────────────────────────────────────────────
     # No text-input widget exists anywhere else in this codebase yet, so
     # rather than build one from scratch for a single field, this card is
@@ -436,10 +601,16 @@ def draw_preferences(screen, current_board_theme, current_arrow_theme, reduced_m
     # custom path. The "Download Stockfish" button covers the common
     # case of not having Stockfish at all, without needing manual JSON
     # editing or a terminal.
+    #
+    # NOTE: this binary is shared by both Analysis mode (AnalysisWorker)
+    # and a "stockfish" Bot Engine choice (StockfishBotWorker) above —
+    # there's only one path preference, not two, since it's the same
+    # executable either way.
     from chess_game import io as _io
     sf_card = _section_card(
-        595, 150, 'Stockfish Engine',
-        'Used by Analysis mode. Download it below, or edit the preferences file for a custom path.',
+        608, 150, 'Stockfish Engine',
+        'Used by Analysis mode and the Stockfish bot engine. Download it below, '
+        'or edit the preferences file for a custom path.',
     )
 
     label_s = fonts.btn_sub.render('Path:', True, MENU_TEXT_SUB)
@@ -507,7 +678,7 @@ def draw_preferences(screen, current_board_theme, current_arrow_theme, reduced_m
         done_s = fonts.btn_sub.render('Path updated automatically.', True, MENU_TEXT_SUB)
         screen.blit(done_s, (download_rect.right + 14, download_rect.centery - done_s.get_height() // 2))
 
-    return pygame.Rect(0, 0, 80, 36), board_rects, arrow_rects, motion_rect, download_rect
+    return pygame.Rect(0, 0, 80, 36), board_rects, arrow_rects, motion_rect, download_rect, engine_rects
 
 
 def draw_main_menu_overlay(screen, fonts, panel_x):

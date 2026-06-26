@@ -86,10 +86,20 @@ def test_draw_menus():
     menus.draw_color_picker(screen, fonts, king_imgs)
     for level in range(1, 11):
         menus.draw_difficulty(screen, level, fonts)
-    back_rect, board_rects, arrow_rects, motion_rect, download_rect = menus.draw_preferences(
+    for elo in (1320, 1500, 2200, 2800, 3190):
+        menus.draw_stockfish_difficulty(screen, elo, fonts)
+    (back_rect, board_rects, arrow_rects, motion_rect,
+     download_rect, engine_rects) = menus.draw_preferences(
         screen, "white_green", "blue", False, "", fonts
     )
     assert download_rect is not None
+    assert set(engine_rects) == {"native", "stockfish"}
+
+    # Both engine-preference states render without error.
+    menus.draw_preferences(
+        screen, "white_green", "blue", False, "", fonts,
+        bot_engine_pref="stockfish",
+    )
 
     # Every download_status branch, including a long error message that
     # needs front-truncation to avoid overflowing the card, and a long

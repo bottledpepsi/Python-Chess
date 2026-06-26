@@ -95,7 +95,8 @@ def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
 
 
 def write_preferences(board_theme: str, arrow_theme: str, reduced_motion: bool = False,
-                      fullscreen: bool = False, stockfish_path: str = "") -> None:
+                      fullscreen: bool = False, stockfish_path: str = "",
+                      bot_engine_pref: str = "native", bot_elo: int = 1500) -> None:
     """Persist preferences atomically."""
     logger = get_logger()
     path = get_save_dir() / PREF_FILENAME
@@ -106,6 +107,10 @@ def write_preferences(board_theme: str, arrow_theme: str, reduced_motion: bool =
         "reduced_motion": reduced_motion,
         "fullscreen": fullscreen,
         "stockfish_path": stockfish_path,
+        # Which engine backs "Vs Bot": "native" (chess_game.engine.bot)
+        # or "stockfish" (external UCI binary, strength-limited by ELO).
+        "bot_engine_pref": bot_engine_pref,
+        "bot_elo": bot_elo,
     }
     try:
         _atomic_write_json(path, payload)
@@ -134,6 +139,12 @@ def read_preferences() -> dict[str, Any]:
                 # Old preference files predate this field too; "" means
                 # "use PATH / default" (see AnalysisWorker).
                 "stockfish_path": str(payload.get("stockfish_path", "")),
+                # Old preference files predate these two as well, so
+                # default to the native engine at a mid-range ELO —
+                # matches StockfishBotWorker.DEFAULT_ELO without importing
+                # that module here just for one constant.
+                "bot_engine_pref": str(payload.get("bot_engine_pref", "native")),
+                "bot_elo": int(payload.get("bot_elo", 1500)),
             }
             logger.info("Preferences loaded <- %s | %s", path, prefs)
             return prefs

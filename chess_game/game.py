@@ -1,6 +1,7 @@
 """The Game dataclass — replaces ~35 module globals."""
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 
 import chess
@@ -10,6 +11,7 @@ from chess_game.anim import AnimationState, FlipState, ReviewState
 from chess_game.bot_worker import BotWorker
 from chess_game.engine.bot import ChessBot
 from chess_game.state import GameState
+from chess_game.stockfish_bot_worker import DEFAULT_ELO, StockfishBotWorker
 
 
 @dataclass
@@ -22,6 +24,11 @@ class Game:
     """
     bot: ChessBot
     bot_worker: BotWorker
+    # Owns its own UCI subprocess for *playing* moves, distinct from
+    # App.analysis_worker which only ever evaluates. Constructed eagerly
+    # (mirrors bot_worker) but the subprocess itself is opened lazily on
+    # first use, same as AnalysisWorker.
+    stockfish_bot_worker: StockfishBotWorker = field(default_factory=StockfishBotWorker)
 
     state: GameState = GameState.MENU
     adapter: ChessAdapter | None = None
@@ -35,6 +42,12 @@ class Game:
 
     bot_level: int = 5
     bot_epoch: int | None = None  # epoch returned by bot_worker.start()
+
+    # "native" -> chess_game.engine.bot.ChessBot via bot_worker (the
+    # original 1-10 alpha-beta engine). "stockfish" -> the external
+    # Stockfish binary via stockfish_bot_worker, strength-limited by ELO.
+    bot_engine_pref: str = "native"
+    bot_elo: int = DEFAULT_ELO
 
     think_dots: int = 0
     think_timer: float = 0.0
@@ -66,6 +79,15 @@ class Game:
     # only ever shows once rather than re-triggering on every toggle.
     analysis_missing_modal_shown: bool = False
 
+    # The eval bar's *currently displayed* white-fill ratio, eased toward
+    # whatever analysis_eval/analysis_is_mate computes as the target each
+    # frame (see App._update_eval_bar_smoothing). None until the first
+    # analysis result arrives, at which point it snaps straight to that
+    # first value instead of easing in from a default — there's no
+    # meaningful "previous" position to animate from on the very first
+    # frame analysis becomes available.
+    eval_bar_display_ratio: float | None = None
+
     # When set, a board-flip animation is in flight. The actual
     # `board_flipped` toggle happens at the animation midpoint (when the
     # board is squashed to zero width). Set by `start_flip()` after a PvP
@@ -92,6 +114,8 @@ class Game:
 
     @property
     def bot_thinking(self) -> bool:
+        if self.bot_engine_pref == "stockfish":
+            return self.stockfish_bot_worker.thinking
         return self.bot_worker.thinking
 
     def start_game(self) -> None:
@@ -99,6 +123,8 @@ class Game:
         worker and clear the TT in the correct order)."""
         self.bot_worker.cancel()
         self.bot_worker.join(timeout=2.0)
+        self.stockfish_bot_worker.cancel()
+        self.stockfish_bot_worker.join(timeout=2.0)
         self.bot.clear_tt()
 
         self.adapter = ChessAdapter()
@@ -114,17 +140,25 @@ class Game:
         self.review.reset()
         self.panel_scroll = 0
         self.analysis_epoch = None
+        self.eval_bar_display_ratio = None
         self.clear_analysis_display()
 
     def launch_bot_move(self) -> None:
         bot_color = "black" if self.player_color == "white" else "white"
         assert self.adapter is not None
-        self.bot_epoch = self.bot_worker.start(self.adapter.board, bot_color, self.bot_level)
+        if self.bot_engine_pref == "stockfish":
+            self.bot_epoch = self.stockfish_bot_worker.start(
+                self.adapter.board, bot_color, self.bot_elo
+            )
+        else:
+            self.bot_epoch = self.bot_worker.start(self.adapter.board, bot_color, self.bot_level)
 
     def poll_bot_move(self) -> chess.Move | None:
         """Return the bot's move if one is ready under the current epoch."""
         if self.bot_epoch is None:
             return None
+        if self.bot_engine_pref == "stockfish":
+            return self.stockfish_bot_worker.take(self.bot_epoch)
         return self.bot_worker.take(self.bot_epoch)
 
     def launch_analysis(self, analysis_worker) -> None:
@@ -160,6 +194,38 @@ class Game:
         self.analysis_pv = []
         self.analysis_is_mate = False
         self.analysis_mate_in = None
+
+    def update_eval_bar_smoothing(self, dt_ms: int) -> None:
+        """Ease eval_bar_display_ratio toward the current target ratio.
+
+        Called once per frame from the render loop (App._render_game),
+        independent of whether a *new* analysis result actually arrived
+        that frame — the bar keeps easing toward the last known target
+        across multiple frames even if no new engine output has landed
+        yet, which is what makes the transition smooth rather than a
+        series of instant jumps every time take() happens to succeed.
+
+        See chess_game.render.board for the exponential-decay formula
+        and how to tune its speed.
+        """
+        from chess_game.render.board import EVAL_BAR_EASE_PER_SEC, eval_target_ratio
+
+        if not self.analysis_enabled:
+            return
+        target = eval_target_ratio(self.analysis_eval, self.analysis_is_mate, self.analysis_mate_in)
+        if self.eval_bar_display_ratio is None:
+            # First result of this game/position — snap rather than ease
+            # in from an arbitrary default.
+            self.eval_bar_display_ratio = target
+            return
+        # Exponential ease-out, frame-rate independent: the fraction of
+        # the remaining gap closed this frame depends only on dt, not on
+        # how many frames it took to get here, so a slow machine (big dt,
+        # few frames/sec) converges in the same wall-clock time as a fast
+        # one (small dt, many frames/sec).
+        dt_s = max(0.0, dt_ms) / 1000.0
+        alpha = 1.0 - math.exp(-EVAL_BAR_EASE_PER_SEC * dt_s)
+        self.eval_bar_display_ratio += (target - self.eval_bar_display_ratio) * alpha
 
     def resolve_board_view(self):
         """Return (board, check_sq, last_move, sel_sq, targets) for whichever

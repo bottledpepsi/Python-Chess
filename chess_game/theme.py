@@ -114,6 +114,24 @@ def difficulty_color(level: int) -> tuple[int, int, int]:
     return _DIFFICULTY_COLORS[max(0, min(9, level - 1))]
 
 
+def elo_color(elo: int, vmin: int, vmax: int) -> tuple[int, int, int]:
+    """Return an accent colour for a Stockfish ELO value, interpolated
+    across the same green->red ramp as difficulty_color but continuously
+    (not in 10 discrete steps) since ELO spans a much wider, finer-grained
+    range than the native engine's 1-10 levels."""
+    span = max(1, vmax - vmin)
+    t = max(0.0, min(1.0, (elo - vmin) / span))
+    idx_f = t * (len(_DIFFICULTY_COLORS) - 1)
+    lo = int(idx_f)
+    hi = min(len(_DIFFICULTY_COLORS) - 1, lo + 1)
+    frac = idx_f - lo
+    c_lo, c_hi = _DIFFICULTY_COLORS[lo], _DIFFICULTY_COLORS[hi]
+    r = int(c_lo[0] + (c_hi[0] - c_lo[0]) * frac)
+    g = int(c_lo[1] + (c_hi[1] - c_lo[1]) * frac)
+    b = int(c_lo[2] + (c_hi[2] - c_lo[2]) * frac)
+    return (r, g, b)
+
+
 DIFF_TIER = {
     1: 'Novice', 2: 'Novice',
     3: 'Casual', 4: 'Casual',

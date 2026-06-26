@@ -9,6 +9,10 @@ class GameState(enum.Enum):
     OPPONENT_PICK = "opponent_pick"
     COLOR_PICK = "color_pick"
     DIFFICULTY = "difficulty"
+    # Stockfish-specific ELO-slider sub-menu, reached instead of DIFFICULTY
+    # when the user's bot engine preference is "stockfish" (see
+    # Game.bot_engine_pref / App._handle_color_pick_event).
+    STOCKFISH_DIFFICULTY = "stockfish_difficulty"
     PREFERENCES = "preferences"
     PVP = "pvp"
     BOT = "bot"
@@ -18,8 +22,12 @@ class GameState(enum.Enum):
 _ALLOWED: dict[GameState, set[GameState]] = {
     GameState.MENU: {GameState.OPPONENT_PICK, GameState.PREFERENCES},
     GameState.OPPONENT_PICK: {GameState.MENU, GameState.PVP, GameState.COLOR_PICK},
-    GameState.COLOR_PICK: {GameState.MENU, GameState.OPPONENT_PICK, GameState.DIFFICULTY},
+    GameState.COLOR_PICK: {
+        GameState.MENU, GameState.OPPONENT_PICK,
+        GameState.DIFFICULTY, GameState.STOCKFISH_DIFFICULTY,
+    },
     GameState.DIFFICULTY: {GameState.COLOR_PICK, GameState.BOT},
+    GameState.STOCKFISH_DIFFICULTY: {GameState.COLOR_PICK, GameState.BOT},
     GameState.PREFERENCES: {GameState.MENU},
     GameState.PVP: {GameState.MENU},
     GameState.BOT: {GameState.MENU},

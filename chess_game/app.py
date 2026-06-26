@@ -30,6 +30,7 @@ from chess_game.render import trays as render_trays
 from chess_game.review import enter_review, exit_review, move_review
 from chess_game.sound import SoundManager
 from chess_game.state import GameState
+from chess_game.stockfish_bot_worker import MAX_ELO, MIN_ELO, StockfishBotWorker
 from chess_game.stockfish_download import StockfishDownloader
 from chess_game.widgets import FOCUS_RING, FocusableRect, FocusGroup
 
@@ -59,6 +60,10 @@ class App:
         arrow_theme = prefs.get('arrow_theme') or 'blue'
         reduced_motion = bool(prefs.get('reduced_motion', False))
         stockfish_path = prefs.get('stockfish_path') or ''
+        bot_engine_pref = prefs.get('bot_engine_pref') or 'native'
+        if bot_engine_pref not in ('native', 'stockfish'):
+            bot_engine_pref = 'native'
+        bot_elo = int(prefs.get('bot_elo') or 1500)
         self._fullscreen = bool(prefs.get('fullscreen', False))
         if board_theme not in theme.BOARD_THEMES:
             board_theme = 'white_green'
@@ -82,10 +87,14 @@ class App:
         bot = ChessBot(max_depth=3, book_path=resource_path('data/book/gm2001.bin'))
         worker = BotWorker(bot)
         self.analysis_worker = AnalysisWorker(stockfish_path)
+        stockfish_worker = StockfishBotWorker(stockfish_path)
+        bot_elo = max(MIN_ELO, min(MAX_ELO, bot_elo))
         self.game = Game(
-            bot=bot, bot_worker=worker, board_theme=board_theme,
+            bot=bot, bot_worker=worker, stockfish_bot_worker=stockfish_worker,
+            board_theme=board_theme,
             arrow_theme=arrow_theme, reduced_motion=reduced_motion,
             stockfish_path=stockfish_path,
+            bot_engine_pref=bot_engine_pref, bot_elo=bot_elo,
         )
         self.game.piece_imgs = self.assets.piece_imgs
 
@@ -109,11 +118,23 @@ class App:
         self.diff_level = 5
         self.diff_focus = FocusGroup([])
 
+        # Stockfish ELO sub-menu (GameState.STOCKFISH_DIFFICULTY) — same
+        # shape as the diff_* block above, kept separate rather than
+        # reusing it so switching engine preference mid-session can never
+        # leave one screen's drag state bleeding into the other's.
+        self.sf_diff_back: pygame.Rect | None = None
+        self.sf_diff_confirm_rect: pygame.Rect | None = None
+        self.sf_diff_slider_rect: pygame.Rect | None = None
+        self.sf_diff_slider_info: tuple | None = None
+        self.sf_diff_slider_dragging = False
+        self.sf_diff_focus = FocusGroup([])
+
         self.pref_back_rect: pygame.Rect | None = None
         self.pref_board_rects: dict = {}
         self.pref_arrow_rects: dict = {}
         self.pref_motion_rect: pygame.Rect | None = None
         self.pref_download_rect: pygame.Rect | None = None
+        self.pref_engine_rects: dict = {}
         self.pref_focus = FocusGroup([])
 
         # Stockfish auto-download. status is one of 'idle'/'downloading'/
@@ -193,6 +214,7 @@ class App:
         else:
             self.analysis_worker.cancel()
             g.analysis_epoch = None
+            g.eval_bar_display_ratio = None
             g.clear_analysis_display()
 
     def _start_stockfish_download(self) -> None:
@@ -493,7 +515,8 @@ class App:
         """Save the fullscreen state to preferences."""
         g = self.game
         save_io.write_preferences(g.board_theme, g.arrow_theme, g.reduced_motion,
-                                  self._fullscreen, g.stockfish_path)
+                                  self._fullscreen, g.stockfish_path,
+                                  g.bot_engine_pref, g.bot_elo)
 
     # ── Bootstrap entry point ───────────────────────────────────────────────
 
@@ -617,6 +640,8 @@ class App:
             self._handle_color_pick_event(event, mx, my)
         elif g.state == GameState.DIFFICULTY:
             self._handle_difficulty_event(event, mx, my)
+        elif g.state == GameState.STOCKFISH_DIFFICULTY:
+            self._handle_stockfish_difficulty_event(event, mx, my)
         elif g.state == GameState.PREFERENCES:
             self._handle_preferences_event(event, mx, my)
         elif g.state in (GameState.PVP, GameState.BOT):
@@ -630,6 +655,7 @@ class App:
             GameState.OPPONENT_PICK: self.opponent_focus,
             GameState.COLOR_PICK: self.picker_focus,
             GameState.DIFFICULTY: self.diff_focus,
+            GameState.STOCKFISH_DIFFICULTY: self.sf_diff_focus,
             GameState.PREFERENCES: self.pref_focus,
         }.get(state)
 
@@ -658,6 +684,10 @@ class App:
             return True
         if g.state == GameState.DIFFICULTY:
             self.diff_focus.clear()
+            g.state = GameState.COLOR_PICK
+            return True
+        if g.state == GameState.STOCKFISH_DIFFICULTY:
+            self.sf_diff_focus.clear()
             g.state = GameState.COLOR_PICK
             return True
         if g.state == GameState.PREFERENCES:
@@ -815,7 +845,10 @@ class App:
             g.player_color = activated_key
             g.board_flipped = (activated_key == 'black')
             self.picker_focus.clear()
-            g.state = GameState.DIFFICULTY
+            if g.bot_engine_pref == 'stockfish':
+                g.state = GameState.STOCKFISH_DIFFICULTY
+            else:
+                g.state = GameState.DIFFICULTY
 
     def _handle_difficulty_event(self, event, mx, my) -> None:
         g = self.game
@@ -858,6 +891,48 @@ class App:
         if g.player_color == 'black':
             self.launch_bot_move()
 
+    def _handle_stockfish_difficulty_event(self, event, mx, my) -> None:
+        """ELO-slider equivalent of _handle_difficulty_event — same
+        click/drag/keyboard shapes, just reading/writing g.bot_elo over
+        [MIN_ELO, MAX_ELO] instead of g.bot_level over 1-10."""
+        g = self.game
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            if self.sf_diff_back and self.sf_diff_back.collidepoint(mx, my):
+                self.sf_diff_focus.clear()
+                g.state = GameState.COLOR_PICK
+            elif self.sf_diff_confirm_rect and self.sf_diff_confirm_rect.collidepoint(mx, my):
+                self._confirm_stockfish_difficulty()
+            elif self.sf_diff_slider_rect and self.sf_diff_slider_rect.collidepoint(mx, my):
+                self.sf_diff_slider_dragging = True
+                if self.sf_diff_slider_info:
+                    sl_x, sl_w, _ = self.sf_diff_slider_info
+                    t = max(0.0, min(1.0, (mx - sl_x) / sl_w))
+                    g.bot_elo = int(round(MIN_ELO + t * (MAX_ELO - MIN_ELO)))
+        elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+            self.sf_diff_slider_dragging = False
+        elif event.type == pygame.MOUSEMOTION:
+            if self.sf_diff_slider_dragging and self.sf_diff_slider_info:
+                sl_x, sl_w, _ = self.sf_diff_slider_info
+                t = max(0.0, min(1.0, (mx - sl_x) / sl_w))
+                g.bot_elo = int(round(MIN_ELO + t * (MAX_ELO - MIN_ELO)))
+        else:
+            for focusable in self.sf_diff_focus.widgets:
+                if focusable.activated_by_key(event):
+                    if focusable.key == 'back':
+                        self.sf_diff_focus.clear()
+                        g.state = GameState.COLOR_PICK
+                    elif focusable.key == 'confirm':
+                        self._confirm_stockfish_difficulty()
+                    break
+
+    def _confirm_stockfish_difficulty(self) -> None:
+        g = self.game
+        self.sf_diff_focus.clear()
+        g.state = GameState.BOT
+        self.start_game()
+        if g.player_color == 'black':
+            self.launch_bot_move()
+
     def _handle_preferences_event(self, event, mx, my) -> None:
         g = self.game
         activated_key = None
@@ -879,6 +954,11 @@ class App:
                 if (activated_key is None and self.pref_download_rect
                         and self.pref_download_rect.collidepoint(mx, my)):
                     activated_key = ('download_stockfish', None)
+                if activated_key is None:
+                    for engine_key, rect in self.pref_engine_rects.items():
+                        if rect.collidepoint(mx, my):
+                            activated_key = ('engine', engine_key)
+                            break
         else:
             for focusable in self.pref_focus.widgets:
                 if focusable.activated_by_key(event):
@@ -910,9 +990,14 @@ class App:
         elif kind == 'download_stockfish':
             self._start_stockfish_download()
             return
+        elif kind == 'engine':
+            assert value is not None
+            g.bot_engine_pref = value
+            changed = True
         if changed:
             save_io.write_preferences(g.board_theme, g.arrow_theme, g.reduced_motion,
-                                      self._fullscreen, g.stockfish_path)
+                                      self._fullscreen, g.stockfish_path,
+                                      g.bot_engine_pref, g.bot_elo)
 
     def _complete_promotion(self, piece_type) -> None:
         """Complete a pending promotion with the given piece type, whether
@@ -1158,15 +1243,26 @@ class App:
                 FocusableRect(self.diff_confirm_rect, 'confirm'),
             ])
             self._draw_focus_ring(self.diff_focus)
+        elif g.state == GameState.STOCKFISH_DIFFICULTY:
+            (self.sf_diff_back, self.sf_diff_confirm_rect,
+             self.sf_diff_slider_rect, self.sf_diff_slider_info) = render_menus.draw_stockfish_difficulty(
+                self.screen, g.bot_elo, self.fonts
+            )
+            self.sf_diff_focus.rebuild([
+                FocusableRect(self.sf_diff_back, 'back'),
+                FocusableRect(self.sf_diff_confirm_rect, 'confirm'),
+            ])
+            self._draw_focus_ring(self.sf_diff_focus)
         elif g.state == GameState.PREFERENCES:
             (self.pref_back_rect, self.pref_board_rects,
              self.pref_arrow_rects, self.pref_motion_rect,
-             self.pref_download_rect) = render_menus.draw_preferences(
+             self.pref_download_rect, self.pref_engine_rects) = render_menus.draw_preferences(
                 self.screen, g.board_theme, g.arrow_theme, g.reduced_motion,
                 g.stockfish_path, self.fonts,
                 download_status=self.stockfish_download_status,
                 download_progress=self.stockfish_downloader.progress(),
                 download_error=self.stockfish_download_error,
+                bot_engine_pref=g.bot_engine_pref,
             )
             pref_focusables = [FocusableRect(self.pref_back_rect, ('back', None))]
             pref_focusables += [
@@ -1176,6 +1272,9 @@ class App:
                 FocusableRect(rect, ('arrow', name)) for name, rect in self.pref_arrow_rects.items()
             ]
             pref_focusables.append(FocusableRect(self.pref_motion_rect, ('motion', None)))
+            pref_focusables += [
+                FocusableRect(rect, ('engine', name)) for name, rect in self.pref_engine_rects.items()
+            ]
             self.pref_focus.rebuild(pref_focusables)
             self._draw_focus_ring(self.pref_focus)
         elif g.state in (GameState.PVP, GameState.BOT):
@@ -1293,6 +1392,7 @@ class App:
         render_board.draw_labels(self.screen, g.board_flipped, self.fonts)
         render_arrows.draw_board_arrow_overlay(self.screen, g.all_arrows, g.arrow_theme, g.board_flipped)
         if g.analysis_enabled:
+            g.update_eval_bar_smoothing(dt)
             # PV arrows are intentionally not drawn — analysis mode shows
             # only the eval bar. The engine still computes and stores the
             # PV in g.analysis_pv (Game.poll_analysis), so re-enabling the
@@ -1300,6 +1400,7 @@ class App:
             render_board.draw_eval_bar(
                 self.screen, g.analysis_eval, g.board_flipped,
                 g.analysis_is_mate, g.analysis_mate_in, self.fonts,
+                display_ratio=g.eval_bar_display_ratio,
             )
 
         self._history_ply_rects, self._live_btn_rect, g.panel_scroll = render_history.draw_history_panel(
