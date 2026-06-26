@@ -2,7 +2,7 @@
 
 A desktop chess game built with Python and pygame, powered by the `python-chess` library for rules and move validation.
 
-![Python](https://img.shields.io/badge/Python-3.10%2B-blue) ![pygame](https://img.shields.io/badge/pygame-2.5%2B-green) ![License](https://img.shields.io/badge/License-GPL--3.0-orange) ![Tests](https://img.shields.io/badge/tests-128%20passing-brightgreen)
+![Python](https://img.shields.io/badge/Python-3.10%2B-blue) ![pygame](https://img.shields.io/badge/pygame-2.5%2B-green) ![License](https://img.shields.io/badge/License-GPL--3.0-orange) [![CI](https://github.com/bottledpepsi/Python-Chess/actions/workflows/ci.yml/badge.svg)](https://github.com/bottledpepsi/Python-Chess/actions/workflows/ci.yml)
 
 ---
 
