@@ -9,6 +9,7 @@ import chess
 from chess_game.adapter import ChessAdapter
 from chess_game.anim import AnimationState, FlipState, ReviewState
 from chess_game.bot_worker import BotWorker
+from chess_game.clock import Clock
 from chess_game.engine.bot import ChessBot
 from chess_game.state import GameState
 from chess_game.stockfish_bot_worker import DEFAULT_ELO, StockfishBotWorker
@@ -42,6 +43,12 @@ class Game:
 
     bot_level: int = 5
     bot_epoch: int | None = None  # epoch returned by bot_worker.start()
+
+    # PvP-only chess clock. None = untimed (also always None in bot games,
+    # regardless of the user's saved time-control preference - see
+    # App._handle_time_control_pick_event / App.start_game).
+    clock: Clock | None = None
+    time_control: str | None = None  # preset name, e.g. "3+2"; None = untimed
 
     # "native" -> chess_game.engine.bot.ChessBot via bot_worker (the
     # original 1-10 alpha-beta engine). "stockfish" -> the external
@@ -142,6 +149,9 @@ class Game:
         self.analysis_epoch = None
         self.eval_bar_display_ratio = None
         self.clear_analysis_display()
+        # Cleared unconditionally here; callers that want a timed PvP game
+        # construct a fresh Clock immediately after calling start_game().
+        self.clock = None
 
     def launch_bot_move(self) -> None:
         bot_color = "black" if self.player_color == "white" else "white"
@@ -330,3 +340,35 @@ class Game:
             self.anim = AnimationState(items=[item], start_ms=now_ms)
         else:
             self.anim.items.append(item)
+
+    def tick_clock(self, now_ms: int) -> None:
+        """Advance the PvP chess clock by one frame and apply a flag-fall
+        loss if the side on move just ran out of time.
+
+        No-op when untimed (self.clock is None), already game-over, or
+        already flagged (Clock.tick is itself a no-op once flagged, but
+        the game_over/winner_result bookkeeping below must still only
+        run once - guarded by `g.game_over` at the call site in App).
+        """
+        if self.clock is None:
+            return
+        self.clock.tick(now_ms)
+        flagged = self.clock.flagged()
+        if flagged is None:
+            return
+        winner = "Black" if flagged == chess.WHITE else "White"
+        self.winner_result = (f"{winner} Wins!", "on Time")
+        self.game_over = True
+
+    def maybe_create_clock(self, time_control: str | None) -> None:
+        """Construct a fresh PvP Clock from `time_control` (a preset name
+        like "3+2", or None/"none" for untimed). Call after start_game().
+
+        Bot games must never call this - callers are responsible for only
+        invoking it on the PvP path (see App._handle_time_control_pick_event).
+        """
+        self.time_control = time_control
+        if time_control is None or time_control == "none":
+            self.clock = None
+            return
+        self.clock = Clock.from_preset(time_control)

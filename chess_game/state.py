@@ -14,6 +14,10 @@ class GameState(enum.Enum):
     # Game.bot_engine_pref / App._handle_color_pick_event).
     STOCKFISH_DIFFICULTY = "stockfish_difficulty"
     PREFERENCES = "preferences"
+    # Time-control preset picker, reached from OPPONENT_PICK when the user
+    # chooses to play a fresh PvP game (no existing save). Bot games never
+    # pass through this screen - time controls are PvP-only.
+    TIME_CONTROL_PICK = "time_control_pick"
     PVP = "pvp"
     BOT = "bot"
 
@@ -21,7 +25,8 @@ class GameState(enum.Enum):
 # Allowed transitions: from_state -> set of to_states it may move to.
 _ALLOWED: dict[GameState, set[GameState]] = {
     GameState.MENU: {GameState.OPPONENT_PICK, GameState.PREFERENCES},
-    GameState.OPPONENT_PICK: {GameState.MENU, GameState.PVP, GameState.COLOR_PICK},
+    GameState.OPPONENT_PICK: {GameState.MENU, GameState.TIME_CONTROL_PICK, GameState.COLOR_PICK},
+    GameState.TIME_CONTROL_PICK: {GameState.OPPONENT_PICK, GameState.PVP},
     GameState.COLOR_PICK: {
         GameState.MENU, GameState.OPPONENT_PICK,
         GameState.DIFFICULTY, GameState.STOCKFISH_DIFFICULTY,

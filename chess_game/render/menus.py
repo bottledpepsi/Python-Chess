@@ -434,7 +434,103 @@ def draw_stockfish_difficulty(screen, elo, fonts):
     )
 
 
-# colorblind_safe added as a selectable board theme option.
+# Six selectable time controls for PvP games: "none" (untimed) plus five
+# presets named "<minutes>+<increment-seconds>", matching chess_game.clock
+# .TIME_CONTROL_PRESETS. Order here is the on-screen grid order.
+TIME_CONTROL_CHOICES = ['none', '1+0', '3+2', '5+0', '10+0', '15+10']
+_TIME_CONTROL_LABELS = {
+    'none': 'No clock',
+    '1+0': '1+0',
+    '3+2': '3+2',
+    '5+0': '5+0',
+    '10+0': '10+0',
+    '15+10': '15+10',
+}
+_TIME_CONTROL_SUBLABELS = {
+    'none': 'Untimed',
+    '1+0': 'Bullet',
+    '3+2': 'Blitz',
+    '5+0': 'Blitz',
+    '10+0': 'Rapid',
+    '15+10': 'Rapid',
+}
+
+
+def draw_time_control_picker(screen, selected, fonts):
+    """PvP time-control preset picker, shown between OPPONENT_PICK and a
+    fresh PvP game (see GameState.TIME_CONTROL_PICK). Bot games never
+    reach this screen — time controls are PvP-only.
+
+    `selected` is one of TIME_CONTROL_CHOICES. Returns
+    (back_rect, confirm_rect, choice_rects) where choice_rects is
+    {preset_name: Rect} for the six selectable cards.
+    """
+    screen.fill(MENU_BG)
+    cx = WIN_W // 2
+
+    kicker = fonts.pick_s.render('LOCAL PLAY \u00b7 PLAYER VS PLAYER', True, MENU_ACCENT)
+    screen.blit(kicker, kicker.get_rect(center=(cx, 86)))
+    title = fonts.pick.render('Choose a time control', True, MENU_TEXT)
+    screen.blit(title, title.get_rect(center=(cx, 120)))
+
+    mx, my = pygame.mouse.get_pos()
+
+    cols, rows = 3, 2
+    card_w, card_h = 150, 100
+    gap_x, gap_y = 20, 20
+    grid_w = cols * card_w + (cols - 1) * gap_x
+    grid_x0 = cx - grid_w // 2
+    grid_y0 = 170
+
+    choice_rects: dict[str, pygame.Rect] = {}
+    for i, key in enumerate(TIME_CONTROL_CHOICES):
+        col, row = i % cols, i // cols
+        rect = pygame.Rect(
+            grid_x0 + col * (card_w + gap_x),
+            grid_y0 + row * (card_h + gap_y),
+            card_w, card_h,
+        )
+        is_selected = key == selected
+        hov = rect.collidepoint(mx, my)
+
+        if is_selected:
+            bg = (46, 68, 42)
+            border_col = MENU_ACCENT_BRIGHT
+        else:
+            bg = (42, 42, 48) if hov else (30, 30, 34)
+            border_col = (90, 90, 90) if hov else (62, 62, 68)
+        pygame.draw.rect(screen, bg, rect, border_radius=12)
+        pygame.draw.rect(screen, border_col, rect, 2 if (is_selected or hov) else 1, border_radius=12)
+
+        label_col = MENU_ACCENT_BRIGHT if is_selected else MENU_TEXT
+        lbl = fonts.pick.render(_TIME_CONTROL_LABELS[key], True, label_col)
+        screen.blit(lbl, lbl.get_rect(center=(rect.centerx, rect.centery - 14)))
+        sub = fonts.btn_sub.render(_TIME_CONTROL_SUBLABELS[key], True, MENU_TEXT_SUB)
+        screen.blit(sub, sub.get_rect(center=(rect.centerx, rect.centery + 22)))
+
+        choice_rects[key] = rect
+
+    grid_bottom = grid_y0 + rows * card_h + (rows - 1) * gap_y
+    pygame.draw.line(screen, (44, 44, 44), (grid_x0, grid_bottom + 24),
+                     (grid_x0 + grid_w, grid_bottom + 24), 1)
+
+    bw, bh = 200, 48
+    btn = pygame.Rect(cx - bw // 2, grid_bottom + 48, bw, bh)
+    hov_btn = btn.collidepoint(mx, my)
+    bg_col = (58, 86, 50) if hov_btn else (40, 58, 36)
+    pygame.draw.rect(screen, bg_col, btn, border_radius=10)
+    brd_col = MENU_ACCENT_BRIGHT if hov_btn else MENU_ACCENT
+    pygame.draw.rect(screen, brd_col, btn, 2 if hov_btn else 1, border_radius=10)
+    btn_lbl = fonts.btn.render('Start Game', True, MENU_TEXT)
+    screen.blit(btn_lbl, btn_lbl.get_rect(center=btn.center))
+
+    back_s = fonts.pick_s.render('\u2190 Back', True, MENU_TEXT_SUB)
+    screen.blit(back_s, (18, 18))
+
+    return pygame.Rect(0, 0, 80, 36), btn, choice_rects
+
+
+
 _BOARD_THEME_CHOICES = ['white_green', 'white_blue', 'white_red', 'colorblind_safe']
 _ARROW_THEME_CHOICES = ['blue', 'yellow', 'green', 'white', 'black']
 

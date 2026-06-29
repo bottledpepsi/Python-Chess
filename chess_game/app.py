@@ -18,11 +18,13 @@ from chess_game.analysis import AnalysisWorker
 from chess_game.anim import ANIM_MS, FLIP_MIN_SCALE, ease_out
 from chess_game.assets import load_images
 from chess_game.bot_worker import BotWorker
+from chess_game.clock import TIME_CONTROL_PRESETS, Clock
 from chess_game.engine.bot import ChessBot
 from chess_game.game import Game
 from chess_game.log import configure_logging
 from chess_game.render import arrows as render_arrows
 from chess_game.render import board as render_board
+from chess_game.render import clocks as render_clocks
 from chess_game.render import history as render_history
 from chess_game.render import menus as render_menus
 from chess_game.render import overlays as render_overlays
@@ -117,6 +119,19 @@ class App:
         self.diff_slider_dragging = False
         self.diff_level = 5
         self.diff_focus = FocusGroup([])
+
+        # Time-control preset picker (GameState.TIME_CONTROL_PICK), reached
+        # from OPPONENT_PICK's 'player' card for a fresh PvP game. tc_choice
+        # is initialised from the saved preference so re-opening the screen
+        # remembers the last pick; it only ever changes via this screen.
+        default_time_control = prefs.get('default_time_control') or 'none'
+        if default_time_control not in render_menus.TIME_CONTROL_CHOICES:
+            default_time_control = 'none'
+        self.tc_choice = default_time_control
+        self.tc_back: pygame.Rect | None = None
+        self.tc_confirm_rect: pygame.Rect | None = None
+        self.tc_choice_rects: dict = {}
+        self.tc_focus = FocusGroup([])
 
         # Stockfish ELO sub-menu (GameState.STOCKFISH_DIFFICULTY) — same
         # shape as the diff_* block above, kept separate rather than
@@ -267,10 +282,23 @@ class App:
     def write_save(self) -> None:
         if self.game.adapter is None:
             return
-        mode = 'bot' if self.game.state == GameState.BOT else 'pvp'
+        g = self.game
+        assert g.adapter is not None
+        mode = 'bot' if g.state == GameState.BOT else 'pvp'
+        if mode == 'bot':
+            save_io.write_save(mode, list(g.adapter.board.move_stack), g.player_color, g.bot_level)
+            return
+        time_control = None
+        white_ms = black_ms = active_side = None
+        if g.clock is not None:
+            time_control = g.time_control
+            white_ms = g.clock.remaining(chess.WHITE)
+            black_ms = g.clock.remaining(chess.BLACK)
+            active_side = 'black' if g.clock.active == chess.BLACK else 'white'
         save_io.write_save(
-            mode, list(self.game.adapter.board.move_stack),
-            self.game.player_color, self.game.bot_level
+            mode, list(g.adapter.board.move_stack), g.player_color, g.bot_level,
+            time_control=time_control, white_time_ms=white_ms,
+            black_time_ms=black_ms, active_side=active_side,
         )
 
     def export_pgn(self) -> None:
@@ -324,10 +352,46 @@ class App:
         if mode == GameState.PVP and not self.game.adapter.is_game_over:
             # Orient for the side to move (Black to move = flipped).
             self.game.board_flipped = (self.game.adapter.turn == 'black')
+        if mode == GameState.PVP:
+            self._restore_clock_from_save(save_data)
         if mode == GameState.BOT and not self.game.adapter.is_game_over:
             if self.game.adapter.turn != self.game.player_color:
                 self.launch_bot_move()
         self.write_save()
+
+    def _restore_clock_from_save(self, save_data: save_io.SaveData) -> None:
+        """Reconstruct g.clock from a resumed PvP save's persisted clock
+        fields, or leave it untimed if the save predates time controls
+        (version-1 saves, or a version-2 save written with time_control
+        = None for an untimed game).
+
+        _last_tick_ms is left at its post-construction default of None
+        (see Clock.__init__/.switch), so the very next tick() call treats
+        "now" as the baseline instead of subtracting the real-world gap
+        between when the game was saved and when it's being resumed.
+        """
+        g = self.game
+        if save_data.time_control is None:
+            g.time_control = None
+            g.clock = None
+            return
+        if save_data.time_control not in TIME_CONTROL_PRESETS:
+            g.time_control = None
+            g.clock = None
+            return
+        _initial_s, increment_s = TIME_CONTROL_PRESETS[save_data.time_control]
+        white_ms = save_data.white_time_ms
+        black_ms = save_data.black_time_ms
+        if white_ms is None or black_ms is None:
+            g.time_control = None
+            g.clock = None
+            return
+        clock = Clock(initial_ms=white_ms, increment_ms=increment_s * 1000)
+        clock.times[chess.WHITE] = white_ms
+        clock.times[chess.BLACK] = black_ms
+        clock.active = chess.BLACK if save_data.active_side == 'black' else chess.WHITE
+        g.time_control = save_data.time_control
+        g.clock = clock
 
     # ── Drag-and-drop helpers ──────────────────────────────────────────────
 
@@ -382,6 +446,8 @@ class App:
             if target_sq in g.adapter.valid_move_targets:
                 result = g.adapter.handle_click(target_sq)
                 if result in ('move', 'capture', 'en_passant'):
+                    if g.state == GameState.PVP and g.clock is not None:
+                        g.clock.switch()
                     piece = g.adapter.board.piece_at(g.adapter.anim_to)
                     img = g.piece_imgs.get((piece.piece_type, piece.color)) if piece else None
                     # Start the slide animation from the cursor's release
@@ -551,6 +617,7 @@ class App:
             self._handle_event(event, mx, my)
 
         self._apply_bot_move()
+        self._tick_chess_clock()
         self.game.poll_analysis(self.analysis_worker)
         self._poll_stockfish_download()
         # Arm any pending board flip once the move slide has finished, then
@@ -636,6 +703,8 @@ class App:
             self._handle_menu_event(event, mx, my)
         elif g.state == GameState.OPPONENT_PICK:
             self._handle_opponent_pick_event(event, mx, my)
+        elif g.state == GameState.TIME_CONTROL_PICK:
+            self._handle_time_control_pick_event(event, mx, my)
         elif g.state == GameState.COLOR_PICK:
             self._handle_color_pick_event(event, mx, my)
         elif g.state == GameState.DIFFICULTY:
@@ -653,6 +722,7 @@ class App:
         return {
             GameState.MENU: self.menu_focus,
             GameState.OPPONENT_PICK: self.opponent_focus,
+            GameState.TIME_CONTROL_PICK: self.tc_focus,
             GameState.COLOR_PICK: self.picker_focus,
             GameState.DIFFICULTY: self.diff_focus,
             GameState.STOCKFISH_DIFFICULTY: self.sf_diff_focus,
@@ -677,6 +747,10 @@ class App:
         if g.state == GameState.OPPONENT_PICK:
             self.opponent_focus.clear()
             g.state = GameState.MENU
+            return True
+        if g.state == GameState.TIME_CONTROL_PICK:
+            self.tc_focus.clear()
+            g.state = GameState.OPPONENT_PICK
             return True
         if g.state == GameState.COLOR_PICK:
             self.picker_focus.clear()
@@ -809,9 +883,7 @@ class App:
                 g.pending_save_data = save
                 g.continue_new_overlay = True
             elif self.pending_corrupt_error is None:
-                g.board_flipped = False
-                g.state = GameState.PVP
-                self.start_game()
+                g.state = GameState.TIME_CONTROL_PICK
         elif activated_key == 'bot':
             save = self.safe_read_save('bot')
             if save:
@@ -820,6 +892,54 @@ class App:
                 g.continue_new_overlay = True
             elif self.pending_corrupt_error is None:
                 g.state = GameState.COLOR_PICK
+
+    def _handle_time_control_pick_event(self, event, mx, my) -> None:
+        """Handle the PvP time-control preset screen. Bot games never
+        reach this handler - it's only wired up for GameState.TIME_CONTROL_PICK,
+        which is only entered from the 'player' branch of OPPONENT_PICK."""
+        g = self.game
+        activated_key: str | tuple[str, str] | None = None
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            if self.tc_back and self.tc_back.collidepoint(mx, my):
+                activated_key = 'back'
+            elif self.tc_confirm_rect and self.tc_confirm_rect.collidepoint(mx, my):
+                activated_key = 'confirm'
+            else:
+                for key, rect in self.tc_choice_rects.items():
+                    if rect.collidepoint(mx, my):
+                        activated_key = ('choice', key)
+                        break
+        else:
+            for focusable in self.tc_focus.widgets:
+                if focusable.activated_by_key(event):
+                    activated_key = focusable.key
+                    break
+
+        if activated_key == 'back':
+            self.tc_focus.clear()
+            g.state = GameState.OPPONENT_PICK
+        elif activated_key == 'confirm':
+            self._confirm_time_control()
+        elif isinstance(activated_key, tuple) and activated_key[0] == 'choice':
+            self.tc_choice = activated_key[1]
+
+    def _confirm_time_control(self) -> None:
+        """Start a fresh PvP game with the currently selected time control.
+
+        Persists the choice to preferences (as the user's default for next
+        time) and constructs the Clock (or leaves it untimed for "none")
+        immediately after start_game() resets it to None.
+        """
+        g = self.game
+        self.tc_focus.clear()
+        g.board_flipped = False
+        g.state = GameState.PVP
+        self.start_game()
+        g.maybe_create_clock(self.tc_choice)
+        save_io.write_preferences(g.board_theme, g.arrow_theme, g.reduced_motion,
+                                  self._fullscreen, g.stockfish_path,
+                                  g.bot_engine_pref, g.bot_elo,
+                                  self.tc_choice)
 
     def _handle_color_pick_event(self, event, mx, my) -> None:
         g = self.game
@@ -1005,6 +1125,8 @@ class App:
         g = self.game
         assert g.adapter is not None
         result = g.adapter.complete_promotion(piece_type)
+        if g.state == GameState.PVP and g.clock is not None:
+            g.clock.switch()
         is_check = g.adapter.check_square is not None
         self.sounds.play_for_move_result(result, is_check=is_check)
         promo_piece_color = (chess.WHITE if g.adapter.turn == 'black' else chess.BLACK)
@@ -1090,6 +1212,8 @@ class App:
                         sq = layout.pixel_to_sq(bx, by, g.board_flipped)
                         result = g.adapter.handle_click(sq)
                         if result in ('move', 'capture', 'en_passant'):
+                            if g.state == GameState.PVP and g.clock is not None:
+                                g.clock.switch()
                             piece = g.adapter.board.piece_at(g.adapter.anim_to)
                             img = g.piece_imgs.get((piece.piece_type, piece.color)) if piece else None
                             g.start_anim(g.adapter.anim_from, g.adapter.anim_to, img)
@@ -1167,6 +1291,34 @@ class App:
             self.write_save()
             self._restart_analysis_if_enabled()
 
+    def _tick_chess_clock(self) -> None:
+        """Advance the PvP chess clock once per frame and handle flag-fall.
+
+        Gated exactly like _apply_bot_move's animation guard, plus the
+        PVP-only and game-over checks: the clock must not run during
+        animation, review mode, or once the game has already ended (either
+        by a normal result or by an earlier flag-fall on a previous frame).
+
+        No-op whenever g.clock is None, which covers both untimed PvP
+        games and every bot game (bot games never have a clock at all -
+        see Game.maybe_create_clock / App._confirm_time_control).
+        """
+        g = self.game
+        if g.state != GameState.PVP or g.clock is None:
+            return
+        if g.game_over or g.review.active:
+            return
+        is_animating = g.anim is not None and g.anim.is_animating(pygame.time.get_ticks())
+        if is_animating:
+            return
+        g.tick_clock(pygame.time.get_ticks())
+        if g.game_over:
+            # Flag-fall just ended the game this frame - persist it like
+            # any other game-ending move, and stop ticking further (tick_clock
+            # already no-ops once Clock itself is flagged, but write_save
+            # here keeps the saved clock state consistent with game_over).
+            self.write_save()
+
     # ── Rendering ────────────────────────────────────────────────────────────
 
     _history_ply_rects: list = []
@@ -1224,6 +1376,15 @@ class App:
             ]
             self.opponent_focus.rebuild(opponent_focusables)
             self._draw_focus_ring(self.opponent_focus)
+        elif g.state == GameState.TIME_CONTROL_PICK:
+            self.tc_back, self.tc_confirm_rect, self.tc_choice_rects = (
+                render_menus.draw_time_control_picker(self.screen, self.tc_choice, self.fonts)
+            )
+            tc_focusables = [FocusableRect(self.tc_back, 'back')] + [
+                FocusableRect(rect, ('choice', key)) for key, rect in self.tc_choice_rects.items()
+            ] + [FocusableRect(self.tc_confirm_rect, 'confirm')]
+            self.tc_focus.rebuild(tc_focusables)
+            self._draw_focus_ring(self.tc_focus)
         elif g.state == GameState.COLOR_PICK:
             self.picker_rects, self.picker_back = render_menus.draw_color_picker(
                 self.screen, self.fonts, self.assets.king_imgs
@@ -1348,6 +1509,12 @@ class App:
         render_trays.draw_trays(
             self.screen, theme.PANEL_X, theme.WIN_H - theme.TRAY_H, g.adapter, g.board_flipped,
             self.fonts, self.assets.tray_imgs, top_thinking, bottom_thinking, g.think_dots,
+        )
+        # PvP-only; no-op for bot games and untimed PvP games (g.clock is
+        # None in both cases). Drawn inside the same tray bars draw_trays
+        # just painted, on the right-hand side - see render/clocks.py.
+        render_clocks.draw_clocks(
+            self.screen, theme.PANEL_X, theme.WIN_H - theme.TRAY_H, g, self.fonts, g.board_flipped,
         )
         # If a board-flip animation is in flight, scale the board horizontally
         # (a gentle dip, not a full squash) and lay a subtle darkening overlay

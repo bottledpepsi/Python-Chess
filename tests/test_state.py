@@ -26,8 +26,12 @@ def test_menu_cannot_go_directly_to_bot():
     assert not can_transition(GameState.MENU, GameState.BOT)
 
 
-def test_opponent_pick_can_go_to_pvp():
-    assert can_transition(GameState.OPPONENT_PICK, GameState.PVP)
+def test_opponent_pick_can_go_to_time_control_pick():
+    assert can_transition(GameState.OPPONENT_PICK, GameState.TIME_CONTROL_PICK)
+
+
+def test_time_control_pick_can_go_to_pvp():
+    assert can_transition(GameState.TIME_CONTROL_PICK, GameState.PVP)
 
 
 def test_opponent_pick_can_go_to_color_pick():

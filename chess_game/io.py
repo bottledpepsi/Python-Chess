@@ -27,7 +27,10 @@ from chess_game.log import get_logger
 if TYPE_CHECKING:
     from chess_game.adapter import ChessAdapter
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+# Oldest save-file version this build can still read. Version 1 predates
+# time controls entirely; such saves load as untimed (time_control=None).
+MIN_SUPPORTED_SCHEMA_VERSION = 1
 
 SAVE_FILENAMES = {
     "pvp": "python-chess_pvp_game.json",
@@ -62,6 +65,14 @@ class SaveData:
     moves: list[chess.Move] = field(default_factory=list)
     color: str = "white"            # player's colour, bot mode only
     level: int = 5                  # bot difficulty 1-10, bot mode only
+    # PvP-only clock fields. time_control is the preset name (e.g. "3+2"),
+    # or None for an untimed PvP game and always for bot games. The two
+    # *_time_ms fields are the remaining time at save time; active_side is
+    # whichever side's clock should resume ticking.
+    time_control: str | None = None
+    white_time_ms: int | None = None
+    black_time_ms: int | None = None
+    active_side: str | None = None
 
 
 def get_save_dir() -> Path:
@@ -96,7 +107,8 @@ def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
 
 def write_preferences(board_theme: str, arrow_theme: str, reduced_motion: bool = False,
                       fullscreen: bool = False, stockfish_path: str = "",
-                      bot_engine_pref: str = "native", bot_elo: int = 1500) -> None:
+                      bot_engine_pref: str = "native", bot_elo: int = 1500,
+                      default_time_control: str = "none") -> None:
     """Persist preferences atomically."""
     logger = get_logger()
     path = get_save_dir() / PREF_FILENAME
@@ -111,6 +123,9 @@ def write_preferences(board_theme: str, arrow_theme: str, reduced_motion: bool =
         # or "stockfish" (external UCI binary, strength-limited by ELO).
         "bot_engine_pref": bot_engine_pref,
         "bot_elo": bot_elo,
+        # The user's preferred PvP time control, e.g. "3+2", or "none" for
+        # untimed. PvP-only: never read when starting a bot game.
+        "default_time_control": default_time_control,
     }
     try:
         _atomic_write_json(path, payload)
@@ -145,6 +160,9 @@ def read_preferences() -> dict[str, Any]:
                 # that module here just for one constant.
                 "bot_engine_pref": str(payload.get("bot_engine_pref", "native")),
                 "bot_elo": int(payload.get("bot_elo", 1500)),
+                # Old preference files predate this field too; "none" means
+                # untimed, matching the default when no preference exists.
+                "default_time_control": str(payload.get("default_time_control", "none")),
             }
             logger.info("Preferences loaded <- %s | %s", path, prefs)
             return prefs
@@ -180,8 +198,15 @@ def read_preferences() -> dict[str, Any]:
     return {}
 
 
-def write_save(mode: str, moves: list[chess.Move], color: str = "white", level: int = 5) -> None:
-    """Persist a game atomically as versioned JSON."""
+def write_save(mode: str, moves: list[chess.Move], color: str = "white", level: int = 5,
+               time_control: str | None = None, white_time_ms: int | None = None,
+               black_time_ms: int | None = None, active_side: str | None = None) -> None:
+    """Persist a game atomically as versioned JSON.
+
+    The four clock parameters are PvP-only; bot saves never carry clock
+    state regardless of what's passed (mirrors the `mode == "bot"` guard
+    already used for color/level below).
+    """
     logger = get_logger()
     filename = SAVE_FILENAMES.get(mode)
     if filename is None:
@@ -196,6 +221,11 @@ def write_save(mode: str, moves: list[chess.Move], color: str = "white", level: 
     if mode == "bot":
         payload["color"] = color
         payload["level"] = level
+    else:
+        payload["time_control"] = time_control
+        payload["white_time_ms"] = white_time_ms
+        payload["black_time_ms"] = black_time_ms
+        payload["active_side"] = active_side
     try:
         _atomic_write_json(path, payload)
     except OSError:
@@ -331,7 +361,7 @@ def read_save(mode: str) -> SaveData | None:
             raise CorruptSaveError(f"Could not read save file: {exc}") from exc
 
         version = payload.get("version")
-        if version != SCHEMA_VERSION:
+        if not isinstance(version, int) or not (MIN_SUPPORTED_SCHEMA_VERSION <= version <= SCHEMA_VERSION):
             logger.exception("Unsupported save schema version %r at %s", version, path)
             raise CorruptSaveError(f"Unsupported save schema version: {version!r}")
 
@@ -348,7 +378,16 @@ def read_save(mode: str) -> SaveData | None:
                 level=int(payload.get("level", 5)),
             )
         else:
-            data = SaveData(mode=mode, moves=moves)
+            # version 1 predates time controls entirely, so payload.get()
+            # naturally yields None for all four fields -> untimed PvP,
+            # exactly like a v2 save written with time_control=None.
+            data = SaveData(
+                mode=mode, moves=moves,
+                time_control=payload.get("time_control"),
+                white_time_ms=payload.get("white_time_ms"),
+                black_time_ms=payload.get("black_time_ms"),
+                active_side=payload.get("active_side"),
+            )
         logger.info("Game loaded (%s) <- %s | %d moves", mode, path, len(moves))
         return data
 

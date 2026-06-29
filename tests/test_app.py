@@ -79,13 +79,49 @@ def test_menu_preferences_click_goes_to_preferences(app):
 
 # ── OPPONENT_PICK ────────────────────────────────────────────────────────────
 
-def test_opponent_pick_player_starts_pvp_game(app):
+def test_opponent_pick_player_goes_to_time_control_pick(app):
     app.game.state = GameState.OPPONENT_PICK
     app._render(16)
     rect = app.opponent_rects['player']
     _click(app, rect.centerx, rect.centery)
+    assert app.game.state == GameState.TIME_CONTROL_PICK
+    # No game has actually started yet - that happens on Start Game.
+    assert app.game.adapter is None
+
+
+def test_time_control_pick_none_starts_untimed_pvp_game(app):
+    app.game.state = GameState.OPPONENT_PICK
+    app._render(16)
+    _click(app, app.opponent_rects['player'].centerx, app.opponent_rects['player'].centery)
+    assert app.game.state == GameState.TIME_CONTROL_PICK
+    app._render(16)
+    rect = app.tc_choice_rects['none']
+    _click(app, rect.centerx, rect.centery)
+    _click(app, app.tc_confirm_rect.centerx, app.tc_confirm_rect.centery)
     assert app.game.state == GameState.PVP
     assert app.game.adapter is not None
+    assert app.game.clock is None
+
+
+def test_time_control_pick_preset_starts_timed_pvp_game(app):
+    app.game.state = GameState.OPPONENT_PICK
+    app._render(16)
+    _click(app, app.opponent_rects['player'].centerx, app.opponent_rects['player'].centery)
+    app._render(16)
+    rect = app.tc_choice_rects['3+2']
+    _click(app, rect.centerx, rect.centery)
+    _click(app, app.tc_confirm_rect.centerx, app.tc_confirm_rect.centery)
+    assert app.game.state == GameState.PVP
+    assert app.game.clock is not None
+    assert app.game.clock.remaining(chess.WHITE) == 180_000
+    assert app.game.clock.remaining(chess.BLACK) == 180_000
+
+
+def test_time_control_pick_back_returns_to_opponent_pick(app):
+    app.game.state = GameState.TIME_CONTROL_PICK
+    app._render(16)
+    _click(app, app.tc_back.centerx, app.tc_back.centery)
+    assert app.game.state == GameState.OPPONENT_PICK
 
 
 def test_opponent_pick_bot_goes_to_color_pick(app):
@@ -370,3 +406,114 @@ def test_tab_is_noop_during_pvp_play(app):
     app.start_game()
     _key(app, pygame.K_TAB)  # must not raise; PVP has no FocusGroup
     assert app.game.state == GameState.PVP
+
+
+# ── PvP chess clock ──────────────────────────────────────────────────────────
+
+def test_flag_fall_ends_game(app, monkeypatch):
+    """Driving a clock past zero via _tick_chess_clock must end the game
+    with the non-flagging side credited as the winner. The fake clock
+    source is patched in so the test doesn't depend on real wall-clock
+    time accumulated earlier in the test run."""
+    from chess_game.clock import Clock
+
+    fake_now = [0]
+    monkeypatch.setattr(pygame.time, "get_ticks", lambda: fake_now[0])
+
+    app.game.state = GameState.PVP
+    app.start_game()
+    app.game.maybe_create_clock("1+0")
+    app.game.clock = Clock(1_000)  # force a 1-second clock regardless of preset
+
+    app._tick_chess_clock()  # establishes the clock's tick baseline at t=0
+    assert app.game.game_over is False
+
+    fake_now[0] = 1_100  # 1.1s later - past the 1-second flag point
+    app._tick_chess_clock()
+
+    assert app.game.game_over is True
+    assert app.game.winner_result == ("Black Wins!", "on Time")
+
+
+def test_clock_does_not_tick_during_animation(app):
+    app.game.state = GameState.PVP
+    app.start_game()
+    app.game.maybe_create_clock("3+2")
+    app.game.clock.tick(0)
+
+    from chess_game.anim import AnimationState
+    app.game.anim = AnimationState(items=[object()], start_ms=pygame.time.get_ticks())
+
+    remaining_before = app.game.clock.remaining(chess.WHITE)
+    app._tick_chess_clock()
+    assert app.game.clock.remaining(chess.WHITE) == remaining_before
+
+
+def test_clock_does_not_tick_for_bot_games(app):
+    """Bot games never have a clock at all, so _tick_chess_clock must be a
+    silent no-op rather than erroring on a missing g.clock."""
+    app.game.state = GameState.BOT
+    app.start_game()
+    assert app.game.clock is None
+    app._tick_chess_clock()  # must not raise
+    assert app.game.clock is None
+
+
+def test_clock_switches_exactly_once_per_pvp_move(app):
+    app.game.state = GameState.PVP
+    app.start_game()
+    app.game.maybe_create_clock("5+0")
+    assert app.game.clock.active == chess.WHITE
+
+    _click(app, *_square_center(chess.E2))
+    _click(app, *_square_center(chess.E4))
+
+    assert app.game.adapter.san_history == ['e4']
+    assert app.game.clock.active == chess.BLACK
+
+
+def test_clock_save_resume_roundtrip(app, isolated_save_dir):
+    app.game.state = GameState.PVP
+    app.start_game()
+    app.game.maybe_create_clock("3+2")
+
+    _click(app, *_square_center(chess.E2))
+    _click(app, *_square_center(chess.E4))
+    _finish_animation(app)
+
+    # Spend down White's clock a bit before saving, so the roundtrip check
+    # is meaningful (not just "whatever the untouched initial value was").
+    app.game.clock.times[chess.WHITE] = 150_000
+    app.game.clock.times[chess.BLACK] = 178_000
+    app.write_save()
+
+    from chess_game import io as save_io
+    saved = save_io.read_save("pvp")
+    assert saved is not None
+    assert saved.time_control == "3+2"
+    assert saved.white_time_ms == 150_000
+    assert saved.black_time_ms == 178_000
+    assert saved.active_side == "black"
+
+    pygame.display.quit()
+    pygame.display.init()
+    resumed = App()
+    resumed.continue_saved_game(saved, GameState.PVP)
+    assert resumed.game.clock is not None
+    assert resumed.game.clock.remaining(chess.WHITE) == 150_000
+    assert resumed.game.clock.remaining(chess.BLACK) == 178_000
+    assert resumed.game.clock.active == chess.BLACK
+    # _last_tick_ms must be reset so the resumed clock doesn't subtract the
+    # real-world gap between save and resume on its first tick.
+    assert resumed.game.clock._last_tick_ms is None
+
+
+def test_bot_game_never_gets_a_clock_even_with_saved_preference(app, isolated_save_dir):
+    """A user's saved default_time_control preference must never leak into
+    bot games - clocks are PvP-only, full stop."""
+    from chess_game import io as save_io
+    save_io.write_preferences("white_blue", "yellow", default_time_control="5+0")
+
+    app.game.state = GameState.BOT
+    app.start_game()
+    assert app.game.clock is None

@@ -261,3 +261,110 @@ def test_pgn_export_path_lands_under_save_dir_pgn_subdir(isolated_save_dir):
     assert path.parent == save_io.get_save_dir() / save_io.PGN_SUBDIR
     assert path.suffix == ".pgn"
     assert path.parent.is_dir()
+
+
+def test_save_resume_roundtrips_clock_state(isolated_save_dir):
+    moves = [chess.Move.from_uci(m) for m in ["e2e4", "e7e5", "g1f3"]]
+    save_io.write_save(
+        "pvp", moves,
+        time_control="3+2", white_time_ms=174_500, black_time_ms=178_200,
+        active_side="black",
+    )
+    data = save_io.read_save("pvp")
+    assert data is not None
+    assert data.mode == "pvp"
+    assert data.moves == moves
+    assert data.time_control == "3+2"
+    assert data.white_time_ms == 174_500
+    assert data.black_time_ms == 178_200
+    assert data.active_side == "black"
+
+
+def test_save_resume_untimed_pvp_roundtrips_as_untimed(isolated_save_dir):
+    """An untimed PvP game writes time_control=None explicitly (not just
+    omitted), and must load back as untimed, not crash on missing fields."""
+    moves = [chess.Move.from_uci("e2e4")]
+    save_io.write_save("pvp", moves)  # all clock kwargs default to None
+    data = save_io.read_save("pvp")
+    assert data is not None
+    assert data.time_control is None
+    assert data.white_time_ms is None
+    assert data.black_time_ms is None
+    assert data.active_side is None
+
+
+def test_v1_save_loads_as_untimed(isolated_save_dir):
+    """A version-1 save predates time controls entirely - no time_control
+    key exists in the payload at all. It must load with a clock-less
+    SaveData rather than raising, and must NOT be rejected by the version
+    check (version 1 is still >= MIN_SUPPORTED_SCHEMA_VERSION)."""
+    save_dir = save_io.get_save_dir()
+    path = save_dir / save_io.SAVE_FILENAMES["pvp"]
+    payload = {"version": 1, "mode": "pvp", "moves": ["e2e4", "e7e5"]}
+    with open(path, "w") as f:
+        json.dump(payload, f)
+
+    data = save_io.read_save("pvp")
+    assert data is not None
+    assert data.mode == "pvp"
+    assert data.moves == [chess.Move.from_uci("e2e4"), chess.Move.from_uci("e7e5")]
+    assert data.time_control is None
+    assert data.white_time_ms is None
+    assert data.black_time_ms is None
+    assert data.active_side is None
+
+
+def test_v1_bot_save_still_loads_color_and_level(isolated_save_dir):
+    """Bot saves never had clock fields to begin with; a v1 bot save's
+    existing color/level fields must still load correctly post-migration."""
+    save_dir = save_io.get_save_dir()
+    path = save_dir / save_io.SAVE_FILENAMES["bot"]
+    payload = {"version": 1, "mode": "bot", "moves": ["d2d4"], "color": "black", "level": 8}
+    with open(path, "w") as f:
+        json.dump(payload, f)
+
+    data = save_io.read_save("bot")
+    assert data is not None
+    assert data.color == "black"
+    assert data.level == 8
+    assert data.time_control is None
+
+
+def test_bot_save_never_persists_clock_fields_even_if_passed(isolated_save_dir):
+    """write_save's clock kwargs are documented as PvP-only; a bot-mode
+    call must not write them to disk even if a caller passes them."""
+    save_io.write_save(
+        "bot", [], color="white", level=5,
+        time_control="3+2", white_time_ms=100_000, black_time_ms=100_000, active_side="white",
+    )
+    save_dir = save_io.get_save_dir()
+    path = save_dir / save_io.SAVE_FILENAMES["bot"]
+    with open(path) as f:
+        payload = json.load(f)
+    assert "time_control" not in payload
+    assert "white_time_ms" not in payload
+    assert "black_time_ms" not in payload
+    assert "active_side" not in payload
+
+
+def test_preferences_roundtrip_includes_default_time_control(isolated_save_dir):
+    save_io.write_preferences("white_blue", "yellow", default_time_control="5+0")
+    prefs = save_io.read_preferences()
+    assert prefs["default_time_control"] == "5+0"
+
+
+def test_preferences_missing_default_time_control_defaults_to_none(isolated_save_dir):
+    """A preferences file written before time controls existed must still
+    load cleanly, with the new field defaulting to "none" (untimed)."""
+    save_dir = save_io.get_save_dir()
+    legacy_payload = {
+        "version": 1,
+        "board_theme": "white_green",
+        "arrow_theme": "blue",
+        "reduced_motion": False,
+        "fullscreen": False,
+    }
+    (save_dir / save_io.PREF_FILENAME).write_text(json.dumps(legacy_payload))
+
+    prefs = save_io.read_preferences()
+    assert prefs["default_time_control"] == "none"
