@@ -20,6 +20,21 @@ A desktop chess game built with Python and pygame, powered by the `python-chess`
 - The bot thread is **cancellable**. Restart or quit mid-think and it stops within ~2 seconds
 - The search uses **alpha-beta with Principal Variation Search**, a transposition table, killer moves, a per-instance history heuristic, quiescence search, MVV-LVA move ordering, and a Polyglot opening book
 - **Null-move pruning** skips subtrees where even passing the turn is too good for the opponent to tolerate — adding roughly 2–4 ply of effective depth at the higher difficulty levels, while a non-pawn-material floor keeps it out of zugzwang-prone endgames where "passing" is illegally optimistic
+- Optional **Stockfish** engine as an alternative to the native bot, with an ELO slider (1320–3190) instead of the 10-level difficulty picker; an in-app downloader fetches a platform-appropriate Stockfish binary on request, no manual install needed
+
+**Analysis mode**
+- Live Stockfish evaluation while playing or reviewing, toggled on/off from an in-game button
+- An eval bar with frame-rate-independent exponential easing, so the fill animates smoothly rather than snapping between updates
+- Best-move arrows drawn from the current principal variation
+- Cancellable, epoch-guarded analysis worker (mirrors the bot's worker design) — restarting analysis on a new position never applies a stale result from the previous one
+- Gracefully degrades when Stockfish isn't installed: analysis is simply unavailable, with a one-time explanatory modal rather than a silent failure
+
+**PvP chess clock**
+- Optional time control for local two-player games, chosen on a dedicated preset screen before the game starts: **None**, **1+0**, **3+2**, **5+0**, **10+0**, or **15+10** (minutes+increment)
+- Clocks for both sides shown above the board, switching automatically on each move
+- Low-time warning colour and a flag-fall that ends the game on time when a clock reaches zero
+- Bot games are never timed — the clock is PvP-only
+- Clock state is included in save/resume: closing and reopening the app part-way through a timed game restores both players' remaining time correctly, without crediting the gap between sessions to either side
 
 **Board & UI**
 - **Drag-and-drop piece movement** — pick up a piece and drop it on a target square
@@ -145,14 +160,19 @@ Python-Chess/
 │   ├── ci.yml                   # ruff + mypy + pytest on push/PR (Linux, macOS, Windows)
 │   └── release.yml              # Builds + uploads binaries on every tag push
 └── chess_game/                  # The game itself
-    ├── app.py                   # main() loop + state machine entry + drag/flip/fullscreen + PGN export wiring
+    ├── app.py                   # main() loop + state machine entry + flip/fullscreen + PGN export wiring
+    ├── input_handler.py         # InputHandler: full event-dispatch tree, per-screen handlers, drag tracking
     ├── state.py                 # GameState (Enum) + transition table (incl. OPPONENT_PICK)
-    ├── game.py                  # @dataclass Game, owns all in-game state + flip animation
+    ├── game.py                  # @dataclass Game, owns all in-game state + flip animation + clock
+    ├── clock.py                 # PvP chess clock: time controls, switch/tick/flag-fall, save/restore
     ├── io.py                    # Atomic, versioned JSON saves + preferences + export_pgn()
     ├── log.py                   # Rotating file logger
-    ├── bot_worker.py            # Cancellable, epoch-guarded bot worker
+    ├── bot_worker.py            # Cancellable, epoch-guarded native bot worker
+    ├── stockfish_bot_worker.py  # Cancellable, epoch-guarded Stockfish bot worker (ELO slider)
+    ├── stockfish_download.py    # In-app Stockfish downloader, platform detection, path-traversal-safe extraction
+    ├── analysis.py              # Cancellable, epoch-guarded live Stockfish analysis (eval bar, best-move arrows)
     ├── theme.py                 # Colours, fonts, board/arrow themes (AA-checked)
-    ├── widgets.py               # Button, Slider (keyboard-navigable)
+    ├── widgets.py                # Button, Slider (keyboard-navigable)
     ├── anim.py                  # dt-scaled animation + review state + FlipState
     ├── layout.py                # Pure coordinate math (unit-tested)
     ├── assets.py                # Image loading
@@ -164,11 +184,12 @@ Python-Chess/
     │   └── piece_tables.py
     └── render/
         ├── board.py             # draw_board (cached surface) + label clearing on flip
+        ├── clocks.py            # PvP clock rendering (active/low-time/flagged states)
         ├── trays.py             # Captured-piece trays
         ├── history.py           # Move-history panel
         ├── overlays.py          # Promotion, winner fade, modals
-        ├── menus.py             # Main menu, opponent picker, color pick, difficulty, preferences, in-game overlay (Save / Export PGN / Quit)
-        └── arrows.py            # Right-click analysis arrows
+        ├── menus.py             # Main menu, opponent picker, color/time-control pick, difficulty, preferences, in-game overlay (Save / Export PGN / Quit)
+        └── arrows.py            # Right-click analysis arrows + best-move PV arrows
 ```
 
 ---
@@ -195,13 +216,17 @@ Python-Chess/
 
 ## Architecture notes
 
-The game is structured as a `chess_game/` package, with `main.py` as a thin launcher guarded by `if __name__ == "__main__"`. A `@dataclass Game` owns all in-game state (adapter, animation, review, winner, bot worker, flip state). There are no module-level mutable globals. Rendering functions in `chess_game/render/` are pure: they take a surface and the `Game`, and write nothing back.
+The game is structured as a `chess_game/` package, with `main.py` as a thin launcher guarded by `if __name__ == "__main__"`. A `@dataclass Game` owns all in-game state (adapter, animation, review, winner, bot worker, flip state, optional `Clock`). There are no module-level mutable globals. Rendering functions in `chess_game/render/` are pure: they take a surface and the `Game`, and write nothing back. `App` (`chess_game/app.py`) owns bootstrap, the frame loop, and rendering; `InputHandler` (`chess_game/input_handler.py`) owns the full event-dispatch tree — translating pygame events into `Game`/`App` state transitions — and is constructed once per `App` and held for its lifetime rather than owning its own copy of the transient UI state that rendering also reads each frame.
 
 The `ChessAdapter` class (in `chess_game/adapter.py`) wraps `chess.Board` and exposes a clean interface (turn, legal moves, SAN history, captured pieces), so the UI never touches `python-chess` internals directly.
 
-The bot runs in a background `BotWorker` thread that is **cancellable** (`threading.Event` abort) and **epoch-guarded**. Restarting mid-think joins the prior thread, and any stale result is dropped by epoch mismatch rather than applied to the new game. The transposition table and history heuristic are only cleared after the worker has joined.
+The bot runs in a background `BotWorker` thread that is **cancellable** (`threading.Event` abort) and **epoch-guarded**. Restarting mid-think joins the prior thread, and any stale result is dropped by epoch mismatch rather than applied to the new game. The transposition table and history heuristic are only cleared after the worker has joined. `StockfishBotWorker` follows the same cancellable, epoch-guarded shape for the optional Stockfish backend.
 
 The search itself is alpha-beta with Principal Variation Search, backed by a transposition table (exact / lower / upper bound entries), a two-slot-per-depth killer-move heuristic, a **per-instance** history heuristic (so two `ChessBot` objects never share move-ordering state), MVV-LVA capture ordering, quiescence search at the leaves, and **null-move pruning** gated by a non-pawn-material floor to avoid zugzwang. A Polyglot opening book (`data/book/gm2001.bin`) supplies weighted-random opening moves until the human deviates from the book.
+
+Live analysis (`chess_game/analysis.py`) mirrors `BotWorker`'s cancellable, epoch-guarded design, but python-chess's blocking `analyse()` call has no cooperative-cancel hook — so `AnalysisWorker` instead opens the non-blocking `analysis()` stream and pumps it in a loop, checking the abort signal between iterations. The eval bar's fill ratio is derived from the centipawn score via a logistic curve and eased exponentially frame-to-frame rather than snapping, so rapid evaluation swings read as motion instead of flicker.
+
+The PvP `Clock` (`chess_game/clock.py`) is ticked once per frame from the main loop rather than running on its own thread, deliberately — it shares the same frame timeline as the move-slide and board-flip animations, and a separate timer thread would reintroduce exactly the kind of race those animations' state machines were built to avoid. Clock state (remaining time per side, the active side, and the configured time control) round-trips through save/resume, with elapsed real time between sessions excluded so reopening a save doesn't silently burn a player's clock.
 
 Saves are written as versioned JSON to a per-user app-data directory (`platformdirs.user_data_dir`) via an atomic `tempfile` + `os.replace` write. A corrupt save raises a user-facing error modal rather than silently starting a fresh game. PGN exports are written separately into a `pgn/` subdirectory of the same app-data dir, one timestamped file per export.
 
@@ -219,7 +244,7 @@ Diagnostics go to a rotating log file in `platformdirs.user_log_dir("python-ches
 pip install -e ".[dev]"          # pytest, pytest-cov, ruff, mypy, pyinstaller
 ruff check .                     # lint
 mypy chess_game                  # type-check
-pytest --cov=chess_game          # tests (128 passing, ≥70% coverage on pure-logic modules)
+pytest --cov=chess_game          # tests (243 passing, 82% overall coverage)
 ```
 
 A GitHub Actions workflow (`.github/workflows/ci.yml`) runs ruff + mypy + pytest on every push and pull request for Linux, macOS, and Windows, across Python 3.10, 3.11, and 3.12.
