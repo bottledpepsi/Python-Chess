@@ -753,7 +753,7 @@ class App:
         # indicators are independent of `suppress` and remain visible.
         if self.drag_active and self.drag_sq is not None:
             suppress = {self.drag_sq} if suppress is None else suppress | {self.drag_sq}
-        
+
         render_board.draw_labels(self.screen, g.board_flipped, self.fonts)
 
         render_board.draw_board(
@@ -806,7 +806,7 @@ class App:
             self.screen.blit(self.board_surf, (theme.BOARD_X, theme.BOARD_Y))
             if g.anim is not None and g.anim.is_animating(now_ms):
                 self._draw_anim_items(g.anim, now_ms)
-            
+
             # Draw menu and analysis buttons before the dragged piece so they
             # appear below (behind) the dragged piece in the z-order.
             mx_, my_ = pygame.mouse.get_pos()
@@ -836,7 +836,7 @@ class App:
             pygame.draw.rect(self.screen, an_brd, self.analysis_toggle_rect, 1, border_radius=6)
             an_s = self.fonts.igmenu.render('A', True, an_fg)
             self.screen.blit(an_s, an_s.get_rect(center=self.analysis_toggle_rect.center))
-            
+
             # Draw eval bar before the dragged piece so the dragged piece
             # renders on top of the eval bar.
             if g.analysis_enabled:
@@ -846,7 +846,7 @@ class App:
                     g.analysis_is_mate, g.analysis_mate_in, self.fonts,
                     display_ratio=g.eval_bar_display_ratio,
                 )
-            
+
             # While a drag is in flight, draw the lifted piece at the cursor on
             # top of the board (and any in-flight slide animation) but below the
             # labels, arrows, and any modal overlays that follow.

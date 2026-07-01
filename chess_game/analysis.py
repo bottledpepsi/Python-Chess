@@ -181,7 +181,10 @@ class AnalysisWorker:
                         while True:
                             next_info = analysis.next()
                             if next_info is None:
-
+                                break
+                            info = next_info
+                    finally:
+                        done.set()
                         watcher.join(timeout=1.0)
 
                 if cancel_event.is_set():
