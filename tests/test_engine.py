@@ -109,7 +109,7 @@ def test_null_move_pruning_speeds_up_deep_search():
     faster with null-move pruning enabled than with it disabled.
 
     Toggling _NULL_MOVE_MIN_DEPTH above the search depth is the cleanest
-    way to disable the feature without duplicating _alphabeta.  A 1.15x
+    way to disable the feature without duplicating _alphabeta.  A 1.25x
     margin is used (not 1.0x) so the assertion isn't sensitive to normal
     run-to-run scheduling noise, while still failing if pruning stops
     providing any real benefit.
@@ -118,7 +118,7 @@ def test_null_move_pruning_speeds_up_deep_search():
     without_null_move = _time_search(depth, min_depth=depth + 1)  # disabled
     with_null_move = _time_search(depth, min_depth=3)             # enabled
 
-    assert with_null_move * 1.15 < without_null_move, (
+    assert with_null_move * 1.25 < without_null_move, (
         f"expected null-move pruning to give a meaningful speedup, got "
         f"{with_null_move:.2f}s (enabled) vs {without_null_move:.2f}s (disabled)"
     )
