@@ -125,14 +125,15 @@ def draw_labels(screen, board_flipped, fonts):
     # The left-margin clear's height is extended by FILE_LABEL_H (rather
     # than stopping flush with the board bottom at BOARD_Y + BOARD_PX) so it
     # also covers the small bottom-left corner square where the two clears
-    # would otherwise meet without overlap. That corner, and the
-    # BOARD_PANEL_GAP sliver on the right (below), are outside both the
-    # cached board_surf blit and every other per-frame fill/blit, so a piece
-    # being dragged out over either one left an uncleared trail of the piece
-    # PNG behind it frame after frame until something else repainted it.
+    # would otherwise meet without overlap. Similarly, the right-margin clear
+    # is extended to include the FILE_LABEL_H area below the board so the
+    # bottom-right corner gap is also fully covered. That corner, and the
+    # BOARD_PANEL_GAP sliver on the right (below), were previously outside
+    # both the cached board_surf blit and every other per-frame fill/blit,
+    # leaving uncleared trails of dragged pieces.
     screen.fill(BG, (0, BOARD_Y, BOARD_X, BOARD_PX + FILE_LABEL_H))
     screen.fill(BG, (BOARD_X, BOARD_Y + BOARD_PX, BOARD_PX, FILE_LABEL_H))
-    screen.fill(BG, (BOARD_X + BOARD_PX, BOARD_Y, BOARD_PANEL_GAP, BOARD_PX))
+    screen.fill(BG, (BOARD_X + BOARD_PX, BOARD_Y, BOARD_PANEL_GAP, BOARD_PX + FILE_LABEL_H))
 
     files = 'hgfedcba' if board_flipped else 'abcdefgh'
     for y in range(8):

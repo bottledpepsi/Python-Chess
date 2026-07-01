@@ -792,6 +792,9 @@ class App:
         # indicators are independent of `suppress` and remain visible.
         if self.drag_active and self.drag_sq is not None:
             suppress = {self.drag_sq} if suppress is None else suppress | {self.drag_sq}
+        
+        render_board.draw_labels(self.screen, g.board_flipped, self.fonts)
+
         render_board.draw_board(
             self.board_surf, board, g.piece_imgs, g.board_theme, g.board_flipped,
             check_sq, last_move, sel_sq, targets, suppress,
@@ -811,6 +814,12 @@ class App:
         render_clocks.draw_clocks(
             self.screen, theme.PANEL_X, theme.WIN_H - theme.TRAY_H, g, self.fonts, g.board_flipped,
         )
+
+        menu_btn_w, menu_btn_h = 76, 18
+        self.menu_btn_ingame_rect = pygame.Rect(
+            theme.PANEL_X - menu_btn_w - 6, 2, menu_btn_w, menu_btn_h
+        )
+
         # If a board-flip animation is in flight, scale the board horizontally
         # (a gentle dip, not a full squash) and lay a subtle darkening overlay
         # on top so the orientation swap reads as a calm transition rather
@@ -841,6 +850,47 @@ class App:
             self.screen.blit(self.board_surf, (theme.BOARD_X, theme.BOARD_Y))
             if g.anim is not None and g.anim.is_animating(now_ms):
                 self._draw_anim_items(g.anim, now_ms)
+            
+            # Draw menu and analysis buttons before the dragged piece so they
+            # appear below (behind) the dragged piece in the z-order.
+            mx_, my_ = pygame.mouse.get_pos()
+            mm_hov = self.menu_btn_ingame_rect.collidepoint(mx_, my_)
+            pygame.draw.rect(self.screen, (52, 52, 52) if mm_hov else (42, 42, 42),
+                              self.menu_btn_ingame_rect, border_radius=6)
+            pygame.draw.rect(self.screen, (90, 90, 90) if mm_hov else (62, 62, 62),
+                              self.menu_btn_ingame_rect, 1, border_radius=6)
+            mm_s = self.fonts.igmenu.render('\u2261  Menu', True, (210, 210, 210) if mm_hov else (140, 140, 140))
+            self.screen.blit(mm_s, mm_s.get_rect(center=self.menu_btn_ingame_rect.center))
+
+            # Analysis toggle, immediately to the left of the Menu button.
+            an_btn_w, an_btn_h = 28, 18
+            self.analysis_toggle_rect = pygame.Rect(
+                self.menu_btn_ingame_rect.x - an_btn_w - 6, 2, an_btn_w, an_btn_h
+            )
+            an_hov = self.analysis_toggle_rect.collidepoint(mx_, my_)
+            if g.analysis_enabled:
+                an_bg = (58, 96, 58) if an_hov else (48, 82, 48)
+                an_brd = (110, 170, 100)
+                an_fg = (210, 240, 200)
+            else:
+                an_bg = (52, 52, 52) if an_hov else (42, 42, 42)
+                an_brd = (90, 90, 90) if an_hov else (62, 62, 62)
+                an_fg = (210, 210, 210) if an_hov else (140, 140, 140)
+            pygame.draw.rect(self.screen, an_bg, self.analysis_toggle_rect, border_radius=6)
+            pygame.draw.rect(self.screen, an_brd, self.analysis_toggle_rect, 1, border_radius=6)
+            an_s = self.fonts.igmenu.render('A', True, an_fg)
+            self.screen.blit(an_s, an_s.get_rect(center=self.analysis_toggle_rect.center))
+            
+            # Draw eval bar before the dragged piece so the dragged piece
+            # renders on top of the eval bar.
+            if g.analysis_enabled:
+                g.update_eval_bar_smoothing(dt)
+                render_board.draw_eval_bar(
+                    self.screen, g.analysis_eval, g.board_flipped,
+                    g.analysis_is_mate, g.analysis_mate_in, self.fonts,
+                    display_ratio=g.eval_bar_display_ratio,
+                )
+            
             # While a drag is in flight, draw the lifted piece at the cursor on
             # top of the board (and any in-flight slide animation) but below the
             # labels, arrows, and any modal overlays that follow.
@@ -851,56 +901,12 @@ class App:
                     if img is not None:
                         rect = img.get_rect(center=self.drag_pos)
                         self.screen.blit(img, rect)
-        render_board.draw_labels(self.screen, g.board_flipped, self.fonts)
         render_arrows.draw_board_arrow_overlay(self.screen, g.all_arrows, g.arrow_theme, g.board_flipped)
-        if g.analysis_enabled:
-            g.update_eval_bar_smoothing(dt)
-            # PV arrows are intentionally not drawn — analysis mode shows
-            # only the eval bar. The engine still computes and stores the
-            # PV in g.analysis_pv (Game.poll_analysis), so re-enabling the
-            # overlay later is a one-line change, not a re-plumb.
-            render_board.draw_eval_bar(
-                self.screen, g.analysis_eval, g.board_flipped,
-                g.analysis_is_mate, g.analysis_mate_in, self.fonts,
-                display_ratio=g.eval_bar_display_ratio,
-            )
 
         self._history_ply_rects, self._live_btn_rect, g.panel_scroll = render_history.draw_history_panel(
             self.screen, theme.PANEL_X, theme.PANEL_W, theme.WIN_W, theme.WIN_H,
             g.adapter.san_history if g.adapter else None, g.review.ply, g.panel_scroll, self.fonts,
         )
-
-        menu_btn_w, menu_btn_h = 76, 18
-        self.menu_btn_ingame_rect = pygame.Rect(
-            theme.PANEL_X - menu_btn_w - 6, 2, menu_btn_w, menu_btn_h
-        )
-        mx_, my_ = pygame.mouse.get_pos()
-        mm_hov = self.menu_btn_ingame_rect.collidepoint(mx_, my_)
-        pygame.draw.rect(self.screen, (52, 52, 52) if mm_hov else (42, 42, 42),
-                          self.menu_btn_ingame_rect, border_radius=6)
-        pygame.draw.rect(self.screen, (90, 90, 90) if mm_hov else (62, 62, 62),
-                          self.menu_btn_ingame_rect, 1, border_radius=6)
-        mm_s = self.fonts.igmenu.render('\u2261  Menu', True, (210, 210, 210) if mm_hov else (140, 140, 140))
-        self.screen.blit(mm_s, mm_s.get_rect(center=self.menu_btn_ingame_rect.center))
-
-        # Analysis toggle, immediately to the left of the Menu button.
-        an_btn_w, an_btn_h = 28, 18
-        self.analysis_toggle_rect = pygame.Rect(
-            self.menu_btn_ingame_rect.x - an_btn_w - 6, 2, an_btn_w, an_btn_h
-        )
-        an_hov = self.analysis_toggle_rect.collidepoint(mx_, my_)
-        if g.analysis_enabled:
-            an_bg = (58, 96, 58) if an_hov else (48, 82, 48)
-            an_brd = (110, 170, 100)
-            an_fg = (210, 240, 200)
-        else:
-            an_bg = (52, 52, 52) if an_hov else (42, 42, 42)
-            an_brd = (90, 90, 90) if an_hov else (62, 62, 62)
-            an_fg = (210, 210, 210) if an_hov else (140, 140, 140)
-        pygame.draw.rect(self.screen, an_bg, self.analysis_toggle_rect, border_radius=6)
-        pygame.draw.rect(self.screen, an_brd, self.analysis_toggle_rect, 1, border_radius=6)
-        an_s = self.fonts.igmenu.render('A', True, an_fg)
-        self.screen.blit(an_s, an_s.get_rect(center=self.analysis_toggle_rect.center))
 
         is_animating = g.anim is not None and g.anim.is_animating(now_ms)
         if g.adapter.promotion_pending and not is_animating:
