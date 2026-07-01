@@ -99,7 +99,7 @@ A desktop chess game built with Python and pygame, powered by the `python-chess`
 
 Download the latest build for your platform from the [Releases page](https://github.com/bottledpepsi/Python-Chess/releases). Every release automatically produces standalone binaries for Linux, macOS, and Windows via GitHub Actions — no Python installation required.
 
-- **Linux:** extract the `.tar.gz` and run `./PythonChess`
+- **Linux:** extract the `.tar.xz` and run `./PythonChess`
 - **macOS:** see [Running the app on macOS](#running-the-app-on-macos) below for the one-time Gatekeeper bypass
 - **Windows:** unzip and double-click `PythonChess.exe`
 
@@ -244,10 +244,10 @@ Diagnostics go to a rotating log file in `platformdirs.user_log_dir("python-ches
 pip install -e ".[dev]"          # pytest, pytest-cov, ruff, mypy, pyinstaller
 ruff check .                     # lint
 mypy chess_game                  # type-check
-pytest --cov=chess_game          # tests (243 passing, 82% overall coverage)
+pytest --cov=chess_game          # tests (275 passing, 84% overall coverage)
 ```
 
-A GitHub Actions workflow (`.github/workflows/ci.yml`) runs ruff + mypy + pytest on every push and pull request for Linux, macOS, and Windows, across Python 3.10, 3.11, and 3.12.
+A GitHub Actions workflow (`.github/workflows/ci.yml`) runs ruff + mypy + pytest on every push and pull request for Linux, macOS, and Windows, across Python 3.10, 3.11, 3.12, and 3.13.
 
 A second workflow (`.github/workflows/release.yml`) triggers on every `v*` tag push, runs the test suite, builds standalone PyInstaller binaries for all three platforms, and uploads them to the GitHub release — so every release ships with ready-to-run downloads.
 
@@ -277,9 +277,9 @@ Then double-click the app as normal. This strips the quarantine flag macOS sets 
 ### Finding the log file
 
 If something goes wrong, the rotating log is at:
-- **Linux:** `~/.cache/python-chess/log/chess.log` (or `$XDG_CACHE_HOME`)
-- **macOS:** `~/Library/Logs/python-chess/chess.log`
-- **Windows:** `%LOCALAPPDATA%\python-chess\python-chess\Logs\chess.log`
+- **Linux:** `~/.local/state/python-chess/log/python-chess.log` (or `$XDG_STATE_HOME`)
+- **macOS:** `~/Library/Logs/python-chess/python-chess.log`
+- **Windows:** `%LOCALAPPDATA%\python-chess\Logs\python-chess.log`
 
 ### Finding exported PGN files
 
