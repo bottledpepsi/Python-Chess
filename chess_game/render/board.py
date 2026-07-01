@@ -107,14 +107,32 @@ def draw_labels(screen, board_flipped, fonts):
     (not the full TILE height below the board — that would overwrite the
     bottom captured-piece tray).
     """
-    from chess_game.theme import BG, BOARD_X, BOARD_Y, FILE_LABEL_H, LABEL_COL, TILE
+    from chess_game.theme import (
+        BG,
+        BOARD_PANEL_GAP,
+        BOARD_X,
+        BOARD_Y,
+        FILE_LABEL_H,
+        LABEL_COL,
+        TILE,
+    )
 
     # Clear the left margin (where rank labels live) and the bottom margin
     # (where file labels live) so stale labels from the previous orientation
     # don't bleed through after a board flip. The bottom clear is bounded
     # to FILE_LABEL_H so it doesn't overwrite the tray below the board.
-    screen.fill(BG, (0, BOARD_Y, BOARD_X, BOARD_PX))
+    #
+    # The left-margin clear's height is extended by FILE_LABEL_H (rather
+    # than stopping flush with the board bottom at BOARD_Y + BOARD_PX) so it
+    # also covers the small bottom-left corner square where the two clears
+    # would otherwise meet without overlap. That corner, and the
+    # BOARD_PANEL_GAP sliver on the right (below), are outside both the
+    # cached board_surf blit and every other per-frame fill/blit, so a piece
+    # being dragged out over either one left an uncleared trail of the piece
+    # PNG behind it frame after frame until something else repainted it.
+    screen.fill(BG, (0, BOARD_Y, BOARD_X, BOARD_PX + FILE_LABEL_H))
     screen.fill(BG, (BOARD_X, BOARD_Y + BOARD_PX, BOARD_PX, FILE_LABEL_H))
+    screen.fill(BG, (BOARD_X + BOARD_PX, BOARD_Y, BOARD_PANEL_GAP, BOARD_PX))
 
     files = 'hgfedcba' if board_flipped else 'abcdefgh'
     for y in range(8):
