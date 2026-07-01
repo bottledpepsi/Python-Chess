@@ -1,22 +1,7 @@
-"""Cancellable, epoch-guarded Stockfish *play* worker.
+"""Cancellable Stockfish worker for playing bot moves at a target ELO.
 
-This is the playing counterpart to chess_game.analysis.AnalysisWorker: where
-AnalysisWorker streams an evaluation for the always-on eval bar,
-StockfishBotWorker is asked for a single best move at a user-selected ELO,
-exactly like chess_game.bot_worker.BotWorker does for the native ChessBot.
-
-It deliberately mirrors BotWorker's epoch/cancel contract (see that module's
-docstring) so App.poll_bot_move()-style code can treat "the active bot
-worker" as an interchangeable abstraction regardless of which engine is
-backing it: an abort Event, an epoch counter so a stale result is never
-applied to a fresh board, and join-before-spawn so at most one worker
-thread is ever alive.
-
-Strength is controlled via the standard UCI_LimitStrength / UCI_Elo
-options (see chess_game.analysis for the equivalent "is Stockfish even
-available" probing logic, which this module deliberately keeps separate
-from rather than sharing a subprocess with — analysis and play can be
-toggled independently and must not fight over one engine handle).
+This worker is separate from AnalysisWorker so playing and evaluation
+can be toggled independently without sharing the same subprocess.
 """
 from __future__ import annotations
 
@@ -94,21 +79,11 @@ class StockfishBotWorker:
         return self._thinking
 
     def set_engine_path(self, path: str) -> None:
-        """Update the configured engine path. Takes effect the next time
-        the engine is (re-)opened, e.g. after stop_engine() or on next
-        start() if it was never successfully opened."""
+        """Update the configured engine path for the next engine spawn."""
         self._engine_path = path or "stockfish"
 
     def _ensure_engine(self) -> bool:
-        """Lazily open the UCI engine. Returns True if usable.
-
-        Mirrors AnalysisWorker._ensure_engine()'s exception handling
-        exactly (see that method's comments for why TimeoutError is
-        caught ahead of the broader OSError clause), but is kept as a
-        separate implementation rather than shared code because the two
-        workers must never share a single engine subprocess — one plays
-        moves the user is bound by, the other only ever advises.
-        """
+        """Lazily open the UCI engine and return whether it is usable."""
         if self._engine is not None:
             return True
         if self._tried_open and not self.engine_available:

@@ -1,10 +1,4 @@
-"""Review-mode controller logic (enter/exit/step), ported from main.py.
-
-review_target / review_going_live / step_review_toward_target were
-dead code in the original (review_target was only ever assigned None) and
-have been dropped entirely. _enter_review here animates directly to the
-target ply in one step, exactly as the original behaved in practice.
-"""
+"""Review-mode controller logic for stepping through past moves."""
 from __future__ import annotations
 
 import pygame

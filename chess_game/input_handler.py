@@ -1,24 +1,7 @@
-"""Input/event handling, split out of App (formerly a ~50-method god-object).
+"""Input/event handling separate from App.
 
-InputHandler owns the full event-dispatch tree: the top-level
-_handle_event() switch, every per-screen _handle_*_event() method, the
-Escape/Tab navigation helpers, drag-and-drop tracking, and promotion
-completion. It does not own any state itself - it operates on the App
-instance it wraps (self.app), the same way the methods used to operate on
-`self` when they lived on App directly. This keeps the change behaviourally
-identical (verified by the existing App test suite, which only ever calls
-through the single _handle_event entry point) while pulling roughly 700
-lines of pure input-parsing logic out of App, leaving App responsible for
-bootstrap, the frame loop, and rendering.
-
-Why not give InputHandler its own state instead of reaching into App? Most
-of what these methods touch - menu/picker/slider rects, FocusGroups, drag
-tracking - is also read every frame by App's render methods. Splitting that
-ownership across two objects would require either duplicating it or wiring
-up two-way sync, neither of which reduces real complexity. Reference-the-
-owner is the conservative, low-risk version of this split; a deeper
-ownership redesign is a separate, riskier piece of work that needs
-real (non-headless) playtesting to land safely.
+InputHandler owns event dispatch and drag/promotion flow while operating
+on App state.
 """
 from __future__ import annotations
 
@@ -41,12 +24,7 @@ DRAG_THRESHOLD_PX = 5
 
 
 class InputHandler:
-    """Translates pygame events into Game/App state transitions.
-
-    Constructed once by App and held for the App's lifetime, so it's a thin
-    wrapper rather than a per-frame allocation - `self.app` is the same App
-    instance for the whole run.
-    """
+    """Translate pygame events into App/Game state transitions."""
 
     def __init__(self, app) -> None:
         self.app = app
@@ -112,10 +90,7 @@ class InputHandler:
                         g.clock.switch()
                     piece = g.adapter.board.piece_at(g.adapter.anim_to)
                     img = g.piece_imgs.get((piece.piece_type, piece.color)) if piece else None
-                    # Start the slide animation from the cursor's release
-                    # position rather than the origin square, so the piece
-                    # flows smoothly from where it was dropped to the
-                    # destination instead of snapping back first.
+                    # Slide the piece from the release position so it moves smoothly to the destination.
                     g.start_anim(g.adapter.anim_from, g.adapter.anim_to, img, start_pos=(mx, my))
                     is_check = g.adapter.check_square is not None
                     is_over = g.adapter.is_game_over
@@ -153,8 +128,7 @@ class InputHandler:
             app._toggle_fullscreen()
             return
 
-        # Clear arrows only on a click that lands on the board itself,
-        # not on every left click (which used to also swallow modal clicks).
+        # Clear arrows only on a board click, not on every left click.
         if (event.type == pygame.MOUSEBUTTONDOWN and event.button == 1
                 and g.state in (GameState.PVP, GameState.BOT)):
             bx, by = mx - theme.BOARD_X, my - theme.BOARD_Y
@@ -660,10 +634,8 @@ class InputHandler:
         assert g.adapter is not None  # guaranteed by g.state in (PVP, BOT)
         now_ms = pygame.time.get_ticks()
         is_animating = g.anim is not None and g.anim.is_animating(now_ms)
-        # While the board-flip animation is in-flight, all piece interaction
-        # is blocked — the board is visually rotating and clicks would land
-        # on the wrong squares. The menu button, history panel, and overlays
-        # still work so the user can open the menu mid-flip if needed.
+        # Block piece interaction while a board flip is in progress.
+        # Menu, history, and overlay controls still work.
         flip_in_progress = g.flip is not None and g.flip.is_active(now_ms)
 
         if event.type == pygame.KEYDOWN:
@@ -717,10 +689,8 @@ class InputHandler:
             else:
                 bx, by = mx - theme.BOARD_X, my - theme.BOARD_Y
                 if 0 <= bx < theme.BOARD_PX and 0 <= by < theme.BOARD_PX:
-                    # Precedence bug fixed - this used to be
-                    # `state == STATE_BOT and adapter.turn != player_color or bot_thinking`
-                    # which (and binds tighter than or) silently dropped PvP
-                    # clicks whenever a stale bot_thinking flag leaked True.
+                    # Avoid a precedence bug that could drop PvP clicks when
+                    # a stale bot_thinking flag was present.
                     bot_to_move = (g.state == GameState.BOT and g.adapter.turn != g.player_color)
                     if bot_to_move or (g.state == GameState.BOT and g.bot_thinking):
                         pass

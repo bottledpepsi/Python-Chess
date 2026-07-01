@@ -99,13 +99,9 @@ def draw_board(
 
 
 def draw_labels(screen, board_flipped, fonts):
-    """Draw rank (1-8) and file (a-h) labels around the board, pure.
+    """Draw rank and file labels around the board.
 
-    The label margin areas (left of the board and below it) are NOT covered
-    by the board surface blit, so stale labels from a previous orientation
-    would persist across a board flip. We clear just the label strips
-    (not the full TILE height below the board — that would overwrite the
-    bottom captured-piece tray).
+    Clear the label gutters so old labels don't persist after a board flip.
     """
     from chess_game.theme import (
         BG,
@@ -117,20 +113,9 @@ def draw_labels(screen, board_flipped, fonts):
         TILE,
     )
 
-    # Clear the left margin (where rank labels live) and the bottom margin
-    # (where file labels live) so stale labels from the previous orientation
-    # don't bleed through after a board flip. The bottom clear is bounded
-    # to FILE_LABEL_H so it doesn't overwrite the tray below the board.
-    #
-    # The left-margin clear's height is extended by FILE_LABEL_H (rather
-    # than stopping flush with the board bottom at BOARD_Y + BOARD_PX) so it
-    # also covers the small bottom-left corner square where the two clears
-    # would otherwise meet without overlap. Similarly, the right-margin clear
-    # is extended to include the FILE_LABEL_H area below the board so the
-    # bottom-right corner gap is also fully covered. That corner, and the
-    # BOARD_PANEL_GAP sliver on the right (below), were previously outside
-    # both the cached board_surf blit and every other per-frame fill/blit,
-    # leaving uncleared trails of dragged pieces.
+    # Clear the left and bottom label gutters so stale labels don't persist
+    # after a board flip. The extra gutter coverage also avoids artifacts
+    # in the corner areas next to the board.
     screen.fill(BG, (0, BOARD_Y, BOARD_X, BOARD_PX + FILE_LABEL_H))
     screen.fill(BG, (BOARD_X, BOARD_Y + BOARD_PX, BOARD_PX, FILE_LABEL_H))
     screen.fill(BG, (BOARD_X + BOARD_PX, BOARD_Y, BOARD_PANEL_GAP, BOARD_PX + FILE_LABEL_H))
@@ -201,32 +186,11 @@ def eval_target_ratio(eval_cp: int | None, is_mate: bool, mate_in: int | None) -
 
 
 def draw_eval_bar(screen, eval_cp, board_flipped, is_mate, mate_in, fonts, display_ratio=None):
-    """Draw the always-on-analysis eval bar in the left margin.
+    """Draw the analysis eval bar and its label.
 
-    A thin vertical strip, BOARD_PX tall, split between a light ("White")
-    fill and a dark ("Black") fill at a point determined by eval_cp via a
-    sigmoid (see analysis._eval_to_ratio / eval_target_ratio above) so the
-    bar moves visibly on small advantages without ever fully pegging on
-    large ones. Mate scores are the one exception: those DO peg fully to
-    whichever side is mating, with a "M{n}" label instead of a decimal
-    eval.
-
-    `display_ratio`, if given, is used for the bar's *fill height*
-    instead of recomputing the ratio fresh from eval_cp/is_mate/mate_in —
-    this is the eased value from Game.update_eval_bar_smoothing, so the
-    bar's height lags smoothly behind the true evaluation by a few frames
-    instead of snapping instantly on every new engine result. The numeric
-    label above the bar always reflects the real (un-eased) eval_cp /
-    mate_in, since the *number* should never lie about the position even
-    while the *bar* is still catching up to it visually. When
-    display_ratio is None (e.g. existing callers/tests that haven't
-    opted into smoothing), the un-eased target ratio is used for the fill
-    too, preserving the previous instant-snap behaviour exactly.
-
-    When board_flipped, the bar's geometry doesn't change (it isn't tied
-    to a square), but its fill orientation does: White's fill always
-    grows from whichever edge is visually "down" for White, so flipping
-    the board flips the bar to match, exactly like the rank labels do.
+    Mate scores peg fully to the mating side and use an M label. If
+    display_ratio is provided, it is the eased fill value; the numeric
+    label always reflects the real score.
     """
     from chess_game.theme import BOARD_PX, BOARD_Y, MENU_TEXT, PANEL_BDR
 
@@ -276,13 +240,6 @@ def draw_eval_bar(screen, eval_cp, board_flipped, is_mate, mate_in, fonts, displ
     else:
         label_text = "--"
     label_s = fonts.label.render(label_text, True, MENU_TEXT)
-    # Left-align the label a few pixels right of the bar's left edge,
-    # rather than centring it on the bar's own midpoint. The bar is only
-    # 14px wide but every realistic label ("+1.20", "M-12", ...) renders
-    # wider than that, so centring on bar_rect.centerx pushed the label's
-    # left edge to a negative x — off the left side of the window
-    # entirely — for every value except the shortest ones. Anchoring from
-    # the bar's left edge instead keeps the whole label on-screen and
-    # roughly above the bar regardless of how wide the text is.
+    # Anchor the label from the bar's left edge so long labels stay visible.
     label_x = bar_rect.x + EVAL_BAR_LABEL_X_OFFSET
     screen.blit(label_s, (label_x, bar_rect.y - label_s.get_height() - EVAL_BAR_LABEL_GAP))

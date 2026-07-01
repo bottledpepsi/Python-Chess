@@ -1,72 +1,4 @@
-"""
-ChessBot — difficulty-aware move selector with probabilistic blunder injection
-           and GM-level Polyglot opening book support.
-
-Architecture overview
----------------------
-The public entry point is a single method:
-
-    move = bot.get_move(board, color, difficulty_level)   # difficulty_level: 1–10
-
-Internally this orchestrates four distinct stages:
-
-  Stage 0 – Opening book lookup (gm2001.bin)
-      On every bot turn while the book is active, query the Polyglot opening
-      book for all entries matching the current board position.  If any entries
-      exist, one is chosen at random (weighted by the entry's weight field) and
-      returned immediately — bypassing all minimax logic.
-
-      Tracking the chosen line
-      ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
-      At game start the bot picks ONE random opening line from all root
-      entries.  It tries to follow that line move-by-move.  If the human
-      deviates, the bot searches the book for any entries that still match
-      the current position (regardless of which line they come from) and
-      picks randomly among those.  Once the current position has NO book
-      entries at all, the book phase ends for the rest of the game.
-
-  Stage 1 – Checkmate override
-      Before any probability rolls, scan every root legal move for an
-      immediate checkmate.  If one exists it is returned unconditionally,
-      bypassing all difficulty logic.  Even a Level-1 bot never misses
-      a forced win.
-
-  Stage 2 – Alpha-beta search for top-N candidates
-      Run the alpha-beta engine (with TT, killers, quiescence) at the
-      depth prescribed by DIFFICULTY_CONFIG[level].  Every root move is
-      evaluated independently so the ranking is never distorted by
-      cross-sibling pruning.  The top-5 scoring moves are retained.
-
-  Stage 3 – Blunder injection
-      Roll a random float against the level's blunder_prob.  On a clean
-      roll (or Level 10, which has 0% blunder), return the best move.
-      On a blunder roll, pick a runner-up from the retained pool using
-      the weighted distribution specified below.
-
-Unified difficulty configuration
----------------------------------
-Level  Search depth   Blunder prob
-  1       1 ply           80 %
-  2       1 ply           70 %
-  3       2 ply           60 %
-  4       2 ply           50 %
-  5       3 ply           40 %
-  6       3 ply           30 %
-  7       4 ply           20 %
-  8       4 ply           10 %
-  9       5 ply            5 %
- 10       6 ply            0 %   ← always plays best move
-
-Blunder pool weights (runner-up selection)
--------------------------------------------
-  50 %  →  2nd-best move  (minor positional slip)
-  30 %  →  3rd-best move  (noticeable tactical mistake)
-  15 %  →  4th-best move  (clear tactical blunder)
-   5 %  →  5th-best move  (severe oversight / hanging piece)
-
-Pool is bounds-checked: if fewer than N candidates exist the weights
-are sliced and re-normalised automatically.
-"""
+"""ChessBot move selection with opening book, alpha-beta search, and difficulty-based blunders."""
 
 import os
 import random
@@ -148,13 +80,8 @@ for sq in range(64):
     _PST_INDEX[chess.WHITE][sq] = (7 - rank) * 8 + file
     _PST_INDEX[chess.BLACK][sq] = rank * 8 + file
 
-# Game-phase calculation: phase counts up from 0 (bare kings-and-pawns
-# endgame) to _PHASE_MAX (full material — opening), based on how much
-# non-pawn material remains on the board. Weights are per-piece, summed
-# over both sides: 1 each for knights/bishops (2 of each per side = 4
-# total per type), 2 each for rooks (2 per side = 4 total), 4 each for
-# queens (1 per side = 2 total). A fully-loaded start position therefore
-# scores 4*1 + 4*1 + 4*2 + 2*4 = 24 == _PHASE_MAX, and bare kings score 0.
+# Game phase is based on non-pawn material and ranges from 0
+# (kings-and-pawns) to 24 (full opening material).
 _PHASE_MAX = 24
 _PHASE_WEIGHTS = {
     chess.KNIGHT: 1,
@@ -165,23 +92,7 @@ _PHASE_WEIGHTS = {
 
 
 def _phase(board):
-    """
-    Estimate how far the game has progressed from a bare kings-and-pawns
-    endgame (0) toward the opening (24 = _PHASE_MAX), based on remaining
-    non-pawn material.
-
-    Each knight/bishop on the board (either side) contributes 1, each
-    rook 2, each queen 4 — so a fully-loaded starting position (4 minors
-    + 4 rooks + 2 queens, counting both sides) scores
-    4*1 + 4*1 + 4*2 + 2*4 = 24, and a position with no non-pawn pieces
-    left scores 0. The result is clamped to [0, 24] as a defensive
-    measure against promotion-heavy positions that could otherwise push
-    the raw count above the nominal maximum (e.g. multiple promoted
-    queens).
-
-    Higher phase => more weight on the midgame PSTs in `_evaluate`'s
-    taper; lower phase => more weight on the endgame PSTs.
-    """
+    """Estimate game phase from non-pawn material: 0 = endgame, 24 = opening."""
     raw = 0
     for piece_type, weight in _PHASE_WEIGHTS.items():
         raw += weight * len(board.pieces(piece_type, chess.WHITE))
@@ -213,17 +124,7 @@ def _pst_index(sq, color):
 # ── Static evaluation ─────────────────────────────────────────────────────────
 
 def _evaluate(board, bot_color):
-    """
-    Material + tapered positional score from bot_color's perspective.
-
-    Each piece contributes a midgame-PST value and an endgame-PST value;
-    the two are blended by the current game phase (see `_phase`) so the
-    same king, for example, is scored as "tucked safely behind a pawn
-    shield" early on and "centralised to support pawn pushes / cut off
-    the enemy king" once material has been traded down. Material itself
-    is NOT tapered — a queen is worth 900 centipawns whether it's move 5
-    or move 55; only the *positional* component shifts with the phase.
-    """
+    """Evaluate board material and phase-weighted positional value."""
     score = 0
     pt_map = _PT_MAP
     pst_index = _PST_INDEX
@@ -239,15 +140,7 @@ def _evaluate(board, bot_color):
 
 
 def _non_pawn_material(board, color):
-    """
-    Sum of material (centipawns) for *color*'s knights/bishops/rooks/queens.
-
-    Used to gate null-move pruning: passing the turn is only a sound
-    heuristic when the side to move has enough material that "doing
-    nothing" can't itself be the best move (zugzwang). Pawn-and-king
-    endgames are exactly the case where that assumption breaks down, so
-    pawns and the king are deliberately excluded from this count.
-    """
+    """Count non-pawn material for null-move pruning safety."""
     total = 0
     for piece_type in (chess.KNIGHT, chess.BISHOP, chess.ROOK, chess.QUEEN):
         total += len(board.pieces(piece_type, color)) * _MATERIAL[piece_type]
@@ -266,15 +159,7 @@ def _mvv_lva_score(board, move):
 
 
 def _order_moves(board, moves, killers, tt_move, history):
-    """
-    Priority ordering: TT best move → captures (MVV-LVA) → killers → quiet.
-    Better ordering means more early cutoffs → faster search.
-
-    `history` is the per-ChessBot-instance history-heuristic table (scores
-    for quiet moves that have produced cutoffs before), passed in rather
-    than read from a module global so it never bleeds between games or
-    between concurrent ChessBot instances.
-    """
+    """Order moves using TT best move, captures, killers, then history."""
     tt_list     = []
     captures    = []
     killer_list = []
@@ -343,15 +228,7 @@ def _quiesce(board, alpha, beta, maximising, bot_color, abort=None):
 
 def _alphabeta(board, depth, alpha, beta, maximising, bot_color,
                killers, tt, history, root=False, abort=None):
-    """
-    Recursive alpha-beta with:
-      - Transposition table (exact / lower / upper bound entries)
-      - Killer move heuristic (two slots per depth)
-      - History heuristic (per-ChessBot-instance, passed in via `history`)
-      - Null-move pruning (skipped near the leaves and in low-material
-        endgames — see `_NULL_MOVE_MIN_DEPTH` / `_NULL_MOVE_MATERIAL_FLOOR`)
-      - Quiescence search at leaf nodes
-    """
+    """Recursive alpha-beta search with TT, killers, history, null-move, and quiescence."""
     if abort is not None and abort.is_set():
         raise SearchAborted()
 
@@ -495,15 +372,7 @@ def _alphabeta(board, depth, alpha, beta, maximising, bot_color,
 # ── Root ranking (no inter-sibling pruning) ───────────────────────────────────
 
 def _rank_all_moves(board, depth, bot_color, killers, tt, history, abort=None):
-    """
-    Score every legal root move at `depth`.
-
-    Alpha-beta is applied WITHIN each subtree for efficiency, but NOT
-    between sibling root moves.  This ensures every root move gets an
-    accurate independent score — essential for a reliable top-N ranking.
-
-    Returns a list of (score, move) sorted best → worst from bot_color's view.
-    """
+    """Rank all root moves independently for top-N scoring."""
     scored = []
     key = board._transposition_key()
     tt_entry = tt.get(key)
@@ -552,29 +421,7 @@ def _weighted_book_choice(entries):
 # ── Public bot class ──────────────────────────────────────────────────────────
 
 class ChessBot:
-    """
-    Chess engine with unified 1–10 difficulty control and Polyglot opening
-    book support (gm2001.bin).
-
-    Opening book behaviour
-    ----------------------
-    - On the first bot move the book is queried for the start position.
-      All available entries are candidates; one is chosen by weighted random
-      selection (proportional to the entry's weight field).
-    - On subsequent bot moves, the current board position is looked up.
-      If entries exist, one is chosen randomly from those entries.
-    - As soon as the current position has no book entries (because the human
-      played an unexpected move and no continuations remain), the book phase
-      ends permanently for this game.
-    - clear_tt() / new-game resets the book state so the next game picks a
-      fresh line.
-
-    Public API
-    ----------
-    bot = ChessBot()
-    move = bot.get_move(board, color, difficulty_level)
-    bot.clear_tt()
-    """
+    """Chess engine with opening book support and difficulty-based search."""
 
     def __init__(self, max_depth: int = 3, book_path: str | None = None):
         self.max_depth = max_depth
@@ -615,10 +462,7 @@ class ChessBot:
             self._book_in_use = False
 
     def _reset_book(self):
-        """
-        Called at game start (clear_tt).  Closes and re-opens the reader so
-        each new game starts fresh with a new random line selection.
-        """
+        """Reset the opening book reader for a new game."""
         if self._book_reader is not None:
             try:
                 self._book_reader.close()
@@ -772,15 +616,7 @@ class ChessBot:
     # ── Private helpers ───────────────────────────────────────────────────────
 
     def _find_immediate_checkmate(self, board):
-        """
-        Scan every root legal move for an immediate checkmate.
-
-        This is a shallow O(n) sweep — no deep search required.
-        Returns the checkmate move if found, otherwise None.
-
-        Note: this fires before any blunder logic, so even the weakest bot
-        will always accept a forced win when it's on the board.
-        """
+        """Return an immediate mate move if one exists; otherwise None."""
         for move in board.legal_moves:
             if not board.gives_check(move):
                 continue
@@ -792,22 +628,7 @@ class ChessBot:
         return None
 
     def _search_top_n(self, board, color, depth, n=5, abort=None):
-        """
-        Run iterative-deepening alpha-beta and return the top `n` root moves.
-
-        Iterative deepening warms the TT so deeper passes benefit from
-        previously computed best-move hints (TT-guided ordering).  At the
-        final depth every root move is scored independently (no cross-sibling
-        pruning) to guarantee accurate rankings.
-
-        Returns
-        -------
-        list of (score, chess.Move), length ≤ n, sorted best → worst
-
-        Raises
-        ------
-        SearchAborted if `abort` is set partway through the search.
-        """
+        """Iterative deepening plus full root move ranking for top-N choices."""
         bot_color = chess.WHITE if color == 'white' else chess.BLACK
         killers   = [[None, None] for _ in range(depth + 1)]
 
@@ -823,27 +644,7 @@ class ChessBot:
         return ranked[:n]
 
     def _weighted_blunder_select(self, pool):
-        """
-        Choose a move from the blunder candidate pool using weighted probabilities.
-
-        Nominal distribution (when pool has 4 entries):
-          50 % → 2nd-best  (pool index 0) — minor positional slip
-          30 % → 3rd-best  (pool index 1) — noticeable tactical mistake
-          15 % → 4th-best  (pool index 2) — clear tactical blunder
-           5 % → 5th-best  (pool index 3) — severe oversight / hanging piece
-
-        Graceful degradation: if the pool has fewer than 4 entries the
-        weight list is trimmed to match and the roll is re-normalised
-        automatically.  No IndexError can occur.
-
-        Parameters
-        ----------
-        pool : list of (score, chess.Move)  — runner-up moves, best first
-
-        Returns
-        -------
-        chess.Move
-        """
+        """Choose a lower-ranked move from the blunder candidate pool."""
         n              = len(pool)
         active_weights = _BLUNDER_WEIGHTS[:n]   # trim to available moves
         total          = sum(active_weights)

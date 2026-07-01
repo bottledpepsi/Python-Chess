@@ -1,18 +1,8 @@
 """Download and install a Stockfish binary for the current platform.
 
-Mirrors the cancellable-worker shape used by AnalysisWorker/BotWorker (a
-background daemon thread, polled by the main loop rather than blocked on),
-but the unit of work here is "download + extract + locate the binary"
-instead of "run a search" — there's no epoch/abort dance because a
-download isn't restarted on every move, only by an explicit user click,
-and the existing thread is simply joined before a retry.
-
-Only ever downloads from the official GitHub releases for
-official-stockfish/Stockfish, per Stockfish's own documented guidance
-("We only recommend downloading from the official GitHub releases. We
-cannot guarantee the safety, reliability, and availability of binaries
-downloaded from third parties.") — never from stockfishchess.org's HTML
-pages or any other mirror.
+This uses a background thread polled by the main loop, matching the
+worker pattern used elsewhere in the app. Only official Stockfish
+GitHub release assets are downloaded.
 """
 from __future__ import annotations
 
@@ -28,21 +18,13 @@ from pathlib import Path
 
 from chess_game.log import get_logger
 
-# Pinned to a specific, known-good tag rather than "latest" — the asset
-# filenames for a new release aren't guaranteed to match this list (new
-# CPU-feature suffixes get added over time), so chasing "latest"
-# automatically risks silently breaking the download on a Stockfish
-# release this code was never updated for. Bump deliberately.
+# Pinned to a specific known-good tag rather than "latest".
+# Asset filenames can change across Stockfish releases.
 _RELEASE_TAG = "sf_18"
 _RELEASE_BASE_URL = f"https://github.com/official-stockfish/Stockfish/releases/download/{_RELEASE_TAG}"
 
-# One asset per platform — deliberately the plain, no-CPU-extension
-# variant (no avx2/bmi2/avx512/... suffix) rather than the fastest one
-# available. A wrong CPU-feature pick (e.g. bmi2 on a CPU that doesn't
-# support BMI2) fails at process-launch time in a way this code can't
-# easily distinguish from "Stockfish isn't installed", whereas the plain
-# variant runs correctly everywhere, just somewhat slower. Confirmed
-# against the real sf_18 release asset list — see module docstring.
+# Use the plain platform asset variant, not a CPU-specific build.
+# This avoids launch failures on unsupported CPUs.
 _ASSET_BY_PLATFORM = {
     "windows-x86_64": "stockfish-windows-x86-64.zip",
     "macos-arm64": "stockfish-macos-m1-apple-silicon.tar",
@@ -90,27 +72,18 @@ def _asset_url_for_current_platform() -> tuple[str, str]:
 
 
 def _is_within_directory(dest_dir: Path, member_path: Path) -> bool:
-    """True iff member_path is dest_dir itself or a path strictly inside it.
+    """Return True if member_path is dest_dir or nested inside it.
 
-    Deliberately NOT a string-prefix check (`str(member_path).startswith(
-    str(dest_dir))`) — that comparison is bypassable by any sibling whose
-    name happens to share dest_dir's name as a prefix. For example, with
-    dest_dir=".../extracted", a traversal member resolving to
-    ".../extracted_evil/payload" would incorrectly pass: the *string*
-    ".../extracted_evil" does start with ".../extracted", even though it
-    is a completely different directory. Path.is_relative_to() (or the
-    equivalent manual walk on Python < 3.9, not needed here since this
-    project requires >=3.10) compares path *components*, so a sibling
-    directory can never satisfy it.
+    Compare path components rather than string prefixes to avoid path
+    traversal attacks.
     """
     return member_path == dest_dir or member_path.is_relative_to(dest_dir)
 
 
 def _extract_archive(archive_path: Path, dest_dir: Path) -> None:
-    """Extract a .zip or .tar archive. Raises on any path-traversal member
-    (a malicious or corrupt archive trying to write outside dest_dir) —
-    this is a real download from the network, not a trusted local file,
-    so member paths get validated before anything is written.
+    """Extract a .zip or .tar archive safely.
+
+    Raise if any archive member would write outside dest_dir.
     """
     dest_dir = dest_dir.resolve()
 
@@ -141,16 +114,10 @@ def _extract_archive(archive_path: Path, dest_dir: Path) -> None:
 
 
 def _find_extracted_binary(search_root: Path) -> Path | None:
-    """Locate the Stockfish executable somewhere under search_root.
+    """Locate a plausible Stockfish executable under search_root.
 
-    Deliberately doesn't assume a fixed internal archive layout (root
-    file vs. nested folder) — Stockfish's own release packaging has
-    changed this before across versions, and re-verifying it against
-    every future release isn't sustainable. Instead, this walks the
-    extracted tree and picks the most plausible candidate: a file whose
-    name contains "stockfish", preferring one with the platform's
-    executable extension (.exe on Windows, none elsewhere) and an
-    executable permission bit where applicable.
+    Avoid assuming a fixed archive layout, and prefer platform-appropriate
+    executable names.
     """
     is_windows = platform.system() == "Windows"
     candidates: list[Path] = []
@@ -175,14 +142,9 @@ def _find_extracted_binary(search_root: Path) -> Path | None:
 
 
 class StockfishDownloader:
-    """Background download + extract + locate, polled rather than awaited.
+    """Background download/extract task polled by the main loop.
 
-    Mirrors BotWorker/AnalysisWorker's "spawn a daemon thread, store the
-    result under a lock, let the main loop poll for it" shape, but models
-    a one-shot user-triggered action rather than a per-move restart, so
-    there's no epoch counter — start() just refuses to spawn a second
-    thread while one is already running, and join()s the old thread
-    before a deliberate retry.
+    Start() launches a thread only if one is not already running.
     """
 
     def __init__(self) -> None:

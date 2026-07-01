@@ -1,22 +1,8 @@
-"""Cancellable, epoch-guarded Stockfish analysis.
+"""Stockfish analysis worker with cancellable background analysis.
 
-Mirrors chess_game.bot_worker.BotWorker exactly: an abort Event, an epoch
-counter so a stale result is never applied to a fresh board, and
-join-before-spawn so at most one worker thread is ever alive.
-
-The one real difference from BotWorker is *how* the abort is delivered.
-python-chess's blocking SimpleEngine.analyse() has no cooperative-cancel
-parameter — its `game` argument is an opaque cache key for the engine
-protocol, not a cancellation signal. The cancellable primitive the library
-actually provides is the non-blocking SimpleEngine.analysis() iterator,
-which returns a SimpleAnalysisResult with a .stop() method. AnalysisWorker
-therefore opens an analysis() stream and pumps it with .next() in a loop,
-checking the abort Event between iterations and calling .stop() the moment
-it's set, instead of blocking forever inside a single analyse() call.
-
-Stockfish is treated as optional: if it can't be launched, engine_available
-is False and every other method becomes a safe no-op. The caller (App)
-checks engine_available before offering analysis mode at all.
+Uses chess.engine.SimpleEngine.analysis() with a watcher thread to stop
+analysis when canceled. Stockfish is optional; failures disable analysis
+without crashing the app.
 """
 from __future__ import annotations
 
@@ -29,11 +15,8 @@ import chess.engine
 
 from chess_game.log import get_logger
 
-# On Windows, a windowed (console-less) PyInstaller build has no console for
-# a spawned child process to inherit, so CreateProcess allocates a brand new
-# one -- the blank terminal window users see when Stockfish launches. Passing
-# CREATE_NO_WINDOW suppresses that. getattr() avoids a mypy attr-defined
-# error on non-Windows platforms, where the constant doesn't exist at all.
+# On Windows, suppress the extra console window when spawning Stockfish.
+# getattr() avoids an attribute error on non-Windows platforms.
 _WINDOWS_CREATIONFLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else None
 
 
@@ -53,12 +36,9 @@ DEFAULT_DEPTH = 18
 
 
 def _eval_to_ratio(eval_cp: float) -> float:
-    """Map a centipawn score (White's POV) to a 0..1 fill ratio for the
-    eval bar, via a standard WDL-style logistic curve.
+    """Map a centipawn score to a 0..1 eval-bar ratio via a logistic curve.
 
-    0 cp -> 0.5 (an even bar). Large positive/negative scores asymptote
-    towards 1.0/0.0 without ever pegging exactly, so the function never
-    overflows or divides by zero regardless of how lopsided eval_cp is.
+    The ratio asymptotes without overflowing on large values.
     """
     # 400 is the same scaling constant Lichess/many engines use for their
     # win-probability sigmoid; it makes +/-100cp (a modest edge) noticeably
@@ -112,11 +92,9 @@ class AnalysisWorker:
         self._engine_path = path or "stockfish"
 
     def _ensure_engine(self) -> bool:
-        """Lazily open the UCI engine. Returns True if usable.
+        """Lazily open the UCI engine and return whether it is usable.
 
-        Only attempts popen_uci once per (path) — repeated calls to start()
-        while Stockfish is missing don't spawn repeated failing subprocess
-        attempts every move.
+        Avoid repeated subprocess spawn attempts for a missing engine path.
         """
         if self._engine is not None:
             return True
@@ -127,19 +105,9 @@ class AnalysisWorker:
         try:
             self._engine = _popen_uci(self._engine_path)
         except TimeoutError as exc:
-            # Caught before the broader `except OSError` below because
-            # TimeoutError is itself a subclass of OSError in Python 3.10+
-            # — an except OSError clause listed first would silently
-            # swallow this case with the wrong (often empty) message.
-            # This fires when the configured path points at a real,
-            # executable program that simply never responds to the UCI
-            # handshake within popen_uci's internal timeout — e.g.
-            # stockfish_path was set to some unrelated binary. Verified
-            # against a real non-engine executable: this is the actual
-            # exception python-chess raises here, not chess.engine.
-            # EngineError, so it has to be caught explicitly or a bad
-            # (but executable) path crashes the app on the next analysis
-            # start instead of just disabling analysis mode.
+            # TimeoutError is a subclass of OSError in Python 3.10+, so
+            # it must be caught before OSError. This happens when the
+            # executable never responds to a UCI handshake.
             self.engine_available = False
             self.missing_reason = (
                 f"Timed out waiting for a UCI response from '{self._engine_path}' "
@@ -195,20 +163,10 @@ class AnalysisWorker:
         def _run() -> None:
             try:
                 with engine.analysis(board_copy, chess.engine.Limit(depth=depth)) as analysis:
-                    # .next() blocks until the engine pushes its next info
-                    # update, so the abort Event can't be polled between
-                    # calls — by the time control returns to this loop the
-                    # wait is already over. Instead, a small watcher thread
-                    # calls analysis.stop() the moment cancel_event fires,
-                    # which makes the in-flight (or next) .next() call
-                    # return None promptly, exactly like calling .stop()
-                    # from the main thread would, just without blocking it.
+                    # .next() blocks until engine info arrives, so a watcher
+                    # thread aborts the search by calling analysis.stop().
                     def _watch_cancel() -> None:
-                        # Waits on whichever of (cancel, done) fires first,
-                        # so this thread always exits promptly instead of
-                        # leaking for the worker's lifetime when a search
-                        # finishes naturally (depth limit reached) without
-                        # ever being aborted.
+                        # Exit promptly when either cancel or done fires.
                         while not cancel_event.is_set() and not done.is_set():
                             cancel_event.wait(timeout=0.05)
                         if cancel_event.is_set():
@@ -223,14 +181,7 @@ class AnalysisWorker:
                         while True:
                             next_info = analysis.next()
                             if next_info is None:
-                                # Either the depth limit was reached, or
-                                # cancel_event fired and the watcher called
-                                # stop() — either way, this is the last
-                                # update.
-                                break
-                            info = next_info
-                    finally:
-                        done.set()
+
                         watcher.join(timeout=1.0)
 
                 if cancel_event.is_set():

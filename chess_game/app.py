@@ -153,10 +153,8 @@ class App:
         self.pref_engine_rects: dict = {}
         self.pref_focus = FocusGroup([])
 
-        # Stockfish auto-download. status is one of 'idle'/'downloading'/
-        # 'done'/'error'; the downloader itself is polled every frame
-        # (see _poll_stockfish_download), mirroring how analysis_worker
-        # and bot_worker are polled rather than awaited.
+        # Stockfish auto-download status: 'idle'/'downloading'/'done'/'error'.
+        # The downloader is polled each frame like the other worker threads.
         self.stockfish_downloader = StockfishDownloader()
         self.stockfish_download_status = 'idle'
         self.stockfish_download_error: str | None = None
@@ -179,13 +177,9 @@ class App:
         self.pending_analysis_missing_modal: bool = False
         self.analysis_missing_ok_rect: pygame.Rect | None = None
 
-        # Drag-and-drop state for moving pieces by dragging. `drag_pending`
-        # is set on mousedown over a selectable piece; it is promoted to
-        # `drag_active` once the cursor moves past DRAG_THRESHOLD_PX, at
-        # which point the piece is lifted off the board and drawn at the
-        # cursor until mouseup. Click-to-select / click-to-move is fully
-        # preserved: a press+release below the threshold behaves exactly
-        # as before.
+        # Drag-and-drop state for moving pieces. drag_pending becomes
+        # drag_active once the cursor moves past DRAG_THRESHOLD_PX.
+        # A click remains a normal select/move if the threshold is not crossed.
         self.drag_pending: bool = False
         self.drag_active: bool = False
         self.drag_sq: int | None = None
@@ -210,16 +204,7 @@ class App:
         self.game.launch_analysis(self.analysis_worker)
 
     def _toggle_analysis(self) -> None:
-        """Flip g.analysis_enabled. Turning it on (re)starts the worker on
-        the current position; turning it off cancels the in-flight search
-        and clears the eval bar / PV arrows so nothing stale lingers.
-
-        The first time analysis is enabled and Stockfish turns out to be
-        unavailable, a one-time modal is queued instead of silently doing
-        nothing — analysis_missing_modal_shown ensures it never fires
-        again for the rest of this App's lifetime, so toggling the button
-        repeatedly doesn't spam the user with the same dialog.
-        """
+        """Toggle analysis mode and restart or cancel the worker as needed."""
         g = self.game
         g.analysis_enabled = not g.analysis_enabled
         if g.analysis_enabled:
@@ -245,15 +230,7 @@ class App:
         self.stockfish_downloader.start(install_dir)
 
     def _poll_stockfish_download(self) -> None:
-        """Called every frame. Picks up a finished download (success or
-        failure) at most once, mirroring AnalysisWorker.take()'s
-        consume-once contract. On success: closes any currently-open
-        engine subprocess (it may be pointed at a now-stale or missing
-        path), points both Game.stockfish_path and the AnalysisWorker at
-        the freshly-downloaded binary, and persists the new path to
-        preferences immediately — the user shouldn't have to separately
-        "save" after downloading.
-        """
+        """Poll the downloader and apply its result when finished."""
         result = self.stockfish_downloader.take_result()
         if result is None:
             return
@@ -396,19 +373,9 @@ class App:
 
 
     def _maybe_arm_pvp_flip(self, now_ms: int) -> None:
-        """If a PvP auto-flip is pending and the move-slide animation has
-        finished, arm a board-flip animation.
+        """Arm a board-flip animation once the move-slide finishes.
 
-        The target orientation is computed from the CURRENT turn (Black to
-        move = flipped). Using an absolute target — not a relative toggle —
-        ensures the board is ALWAYS in the correct orientation for the side
-        to move, even if the player makes rapid moves that queue up multiple
-        flips.
-
-        If a flip is already in-flight when a new one needs to arm (rapid
-        moves), we cancel the old flip and arm a fresh one with the correct
-        target. The old flip's partial animation is discarded — correctness
-        of the final orientation takes priority over animation smoothness.
+        The target orientation is derived from the current turn.
         """
         g = self.game
         if not g.pending_pvp_flip:
@@ -434,15 +401,9 @@ class App:
         g.start_flip(now_ms, target_flipped)
 
     def _enforce_pvp_orientation(self, now_ms: int) -> None:
-        """Safety net: if no flip is in-flight or pending and no move slide
-        is animating in PvP mode, force the board orientation to match the
-        current turn.
+        """Force the board orientation to match the current PVP turn.
 
-        This catches any edge case where rapid moves left the board in the
-        wrong orientation — the player sees a one-frame snap to the correct
-        view rather than a stale wrong view. Without this, a race between
-        the flip animation and rapid move input could theoretically leave
-        the board showing the wrong player at the bottom.
+        Only runs when no flip or move animation is active.
         """
         g = self.game
         if g.state != GameState.PVP or g.adapter is None:
@@ -820,10 +781,8 @@ class App:
             theme.PANEL_X - menu_btn_w - 6, 2, menu_btn_w, menu_btn_h
         )
 
-        # If a board-flip animation is in flight, scale the board horizontally
-        # (a gentle dip, not a full squash) and lay a subtle darkening overlay
-        # on top so the orientation swap reads as a calm transition rather
-        # than a violent crush.
+        # If a board-flip animation is in flight, scale the board and add a
+        # darkening overlay so the orientation swap feels smooth.
         flip = g.flip
         if flip is not None and flip.is_active(now_ms):
             scale_x = flip.progress(now_ms)
@@ -831,13 +790,10 @@ class App:
             board_h = self.board_surf.get_height()
             new_w = max(1, int(board_w * scale_x))
             squashed = pygame.transform.smoothscale(self.board_surf, (new_w, board_h))
-            # Centre the scaled board so it appears to breathe in from both edges.
+            # Centre the scaled board horizontally.
             offset_x = (board_w - new_w) // 2
             self.screen.blit(squashed, (theme.BOARD_X + offset_x, theme.BOARD_Y))
-            # Subtle darkening overlay during the flip — peaks at the
-            # midpoint (when the orientation swaps) and fades out smoothly.
-            # This sells the "card flip" feel without the nausea of a full
-            # squash to zero width.
+            # Add a darkening overlay during the flip for a smoother feel.
             darkness = (1.0 - (scale_x - FLIP_MIN_SCALE) / (1.0 - FLIP_MIN_SCALE)) * 90
             if darkness > 1:
                 veil = pygame.Surface((new_w, board_h), pygame.SRCALPHA)

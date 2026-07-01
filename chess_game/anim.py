@@ -8,9 +8,8 @@ import chess
 ANIM_MS = 120
 FLIP_MS = 600  # Board-flip animation duration (ms), including the pre-flip delay.
 FLIP_DELAY_MS = 300  # Pause after the move slide before the flip begins.
-# Minimum horizontal scale during the flip — the board never fully squashes
-# to zero (which was nauseating); it just dips to this fraction of full width
-# while the orientation swaps, then eases back out.
+# Minimum horizontal scale during the flip; the board narrows slightly
+# rather than collapsing to zero width.
 FLIP_MIN_SCALE = 0.78
 
 
@@ -38,24 +37,8 @@ class AnimationState:
 class FlipState:
     """Tracks an in-flight board-flip animation.
 
-    The flip plays in two phases:
-      1. DELAY (FLIP_DELAY_MS): a brief pause after the move slide so the
-         player sees the piece land before the board starts rotating.
-      2. FLIP (FLIP_MS - FLIP_DELAY_MS): the board squashes horizontally
-         to zero width (first half) then expands back from the opposite
-         side (second half). `board_flipped` is SET to `target_flipped` at
-         the midpoint so the orientation swap is hidden by the
-         zero-width moment.
-
-    `target_flipped` is the ABSOLUTE orientation the board should have
-    after the flip (not a relative toggle). This prevents race conditions
-    where rapid moves could leave the board in the wrong orientation —
-    no matter how many flips queue up, the final orientation is always
-    the correct one for the current turn.
-
-    `start_ms` is set when the flip is armed (immediately after the move
-    is applied). The caller checks `is_delaying` / `is_flipping` /
-    `is_active` to decide what to render.
+    The flip has a delay phase and a horizontal squash/stretch phase.
+    `target_flipped` is the absolute orientation after the flip.
     """
     start_ms: int = 0
     target_flipped: bool = False
@@ -115,9 +98,8 @@ class FlipState:
             return False
         elapsed = now_ms - self.start_ms
         t = (elapsed - FLIP_DELAY_MS) / (FLIP_MS - FLIP_DELAY_MS)
-        # Swap once, at the midpoint. We can't detect a single frame exactly
-        # at t=0.5, so swap during the second half (t >= 0.5). The caller
-        # gates this with a `swapped` flag so it only fires once.
+        # Swap once at the midpoint. The caller uses a swapped flag so the
+        # orientation change only happens once.
         return t >= 0.5
 
 
