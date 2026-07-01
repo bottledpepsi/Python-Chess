@@ -20,12 +20,31 @@ checks engine_available before offering analysis mode at all.
 """
 from __future__ import annotations
 
+import subprocess
+import sys
 import threading
 
 import chess
 import chess.engine
 
 from chess_game.log import get_logger
+
+# On Windows, a windowed (console-less) PyInstaller build has no console for
+# a spawned child process to inherit, so CreateProcess allocates a brand new
+# one -- the blank terminal window users see when Stockfish launches. Passing
+# CREATE_NO_WINDOW suppresses that. getattr() avoids a mypy attr-defined
+# error on non-Windows platforms, where the constant doesn't exist at all.
+_WINDOWS_CREATIONFLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else None
+
+
+def _popen_uci(engine_path: str) -> chess.engine.SimpleEngine:
+    """popen_uci wrapper that suppresses the blank console window a frozen
+    Windows build would otherwise spawn alongside the Stockfish process."""
+    if _WINDOWS_CREATIONFLAGS is not None:
+        return chess.engine.SimpleEngine.popen_uci(
+            engine_path, creationflags=_WINDOWS_CREATIONFLAGS
+        )
+    return chess.engine.SimpleEngine.popen_uci(engine_path)
 
 # Default search depth for a single analysis pass. Deep enough to be a
 # useful "what's best here" signal, shallow enough to return in well under
@@ -106,7 +125,7 @@ class AnalysisWorker:
         self._tried_open = True
         logger = get_logger()
         try:
-            self._engine = chess.engine.SimpleEngine.popen_uci(self._engine_path)
+            self._engine = _popen_uci(self._engine_path)
         except TimeoutError as exc:
             # Caught before the broader `except OSError` below because
             # TimeoutError is itself a subclass of OSError in Python 3.10+
