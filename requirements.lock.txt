@@ -5,8 +5,8 @@
 #    pip-compile --output-file=requirements.lock.txt pyproject.toml
 #
 chess==1.11.2
-    # via python-chess-game (pyproject.toml)
+    # via python-chess (pyproject.toml)
 platformdirs==4.10.0
-    # via python-chess-game (pyproject.toml)
+    # via python-chess (pyproject.toml)
 pygame==2.6.1
-    # via python-chess-game (pyproject.toml)
+    # via python-chess (pyproject.toml)
