@@ -66,7 +66,7 @@ jobs:
         run: |
           python -m venv build-venv
           source build-venv/bin/activate
-          pip install --upgrade pip
+          python -m pip install --upgrade pip
           pip install .
           pip install pyinstaller
           pyinstaller --onefile --add-data "data:data" --name "PythonChess" main.py
@@ -76,10 +76,24 @@ jobs:
         run: |
           python -m venv build-venv
           source build-venv/bin/activate
-          pip install --upgrade pip
+          python -m pip install --upgrade pip
           pip install .
           pip install pyinstaller pillow
-          pyinstaller --onedir --windowed --icon=icon.ico --add-data "data:data" --name "PythonChess" main.py
+          pyinstaller --onedir --windowed --strip --icon=icon.ico --add-data "data:data" --name "PythonChess" main.py
+
+      - name: Thin universal2 binaries (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          ARCH="$(uname -m)"
+          echo "Thinning fat binaries down to ${ARCH}"
+          find dist/PythonChess.app -type f \( -name "*.dylib" -o -name "*.so" -o -perm -u+x \) -print0 | \
+            while IFS= read -r -d '' f; do
+              if file "$f" | grep -q "Mach-O universal binary"; then
+                MODE="$(stat -f '%Lp' "$f")"
+                lipo -thin "$ARCH" "$f" -output "$f.thin" && mv "$f.thin" "$f"
+                chmod "$MODE" "$f"
+              fi
+            done
 
       - name: Build with PyInstaller (Windows)
         if: runner.os == 'Windows'
@@ -87,7 +101,7 @@ jobs:
         run: |
           python -m venv build-venv
           source build-venv/Scripts/activate
-          pip install --upgrade pip
+          python -m pip install --upgrade pip
           pip install .
           pip install pyinstaller
           pyinstaller --onefile --windowed --icon=icon.ico --add-data "data;data" --name "PythonChess" main.py
