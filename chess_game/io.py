@@ -108,7 +108,8 @@ def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
 def write_preferences(board_theme: str, arrow_theme: str, reduced_motion: bool = False,
                       fullscreen: bool = False, stockfish_path: str = "",
                       bot_engine_pref: str = "native", bot_elo: int = 1500,
-                      default_time_control: str = "none") -> None:
+                      default_time_control: str = "none",
+                      sound_enabled: bool = True) -> None:
     """Persist preferences atomically."""
     logger = get_logger()
     path = get_save_dir() / PREF_FILENAME
@@ -126,6 +127,10 @@ def write_preferences(board_theme: str, arrow_theme: str, reduced_motion: bool =
         # The user's preferred PvP time control, e.g. "3+2", or "none" for
         # untimed. PvP-only: never read when starting a bot game.
         "default_time_control": default_time_control,
+        # Preferences → Sound Effects toggle. True (the historical
+        # behaviour, before this toggle existed) unless the user has
+        # explicitly muted.
+        "sound_enabled": sound_enabled,
     }
     try:
         _atomic_write_json(path, payload)
@@ -163,6 +168,10 @@ def read_preferences() -> dict[str, Any]:
                 # Old preference files predate this field too; "none" means
                 # untimed, matching the default when no preference exists.
                 "default_time_control": str(payload.get("default_time_control", "none")),
+                # Old preference files predate this field too; default to
+                # sound on, matching the app's behaviour before this
+                # toggle existed.
+                "sound_enabled": bool(payload.get("sound_enabled", True)),
             }
             logger.info("Preferences loaded <- %s | %s", path, prefs)
             return prefs

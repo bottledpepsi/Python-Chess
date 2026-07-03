@@ -33,9 +33,14 @@ _ALLOWED: dict[GameState, set[GameState]] = {
     },
     GameState.DIFFICULTY: {GameState.COLOR_PICK, GameState.BOT},
     GameState.STOCKFISH_DIFFICULTY: {GameState.COLOR_PICK, GameState.BOT},
-    GameState.PREFERENCES: {GameState.MENU},
-    GameState.PVP: {GameState.MENU},
-    GameState.BOT: {GameState.MENU},
+    # PREFERENCES is also reachable mid-game (from the in-game menu overlay,
+    # see App._handle_main_menu_overlay_event) and returns to whichever of
+    # PVP/BOT it was opened from, tracked out-of-band on
+    # Game.preferences_return_state since the transition table itself has
+    # no notion of "return to caller".
+    GameState.PREFERENCES: {GameState.MENU, GameState.PVP, GameState.BOT},
+    GameState.PVP: {GameState.MENU, GameState.PREFERENCES},
+    GameState.BOT: {GameState.MENU, GameState.PREFERENCES},
 }
 
 

@@ -61,6 +61,7 @@ class App:
         board_theme = prefs.get('board_theme') or 'white_green'
         arrow_theme = prefs.get('arrow_theme') or 'blue'
         reduced_motion = bool(prefs.get('reduced_motion', False))
+        sound_enabled = bool(prefs.get('sound_enabled', True))
         stockfish_path = prefs.get('stockfish_path') or ''
         bot_engine_pref = prefs.get('bot_engine_pref') or 'native'
         if bot_engine_pref not in ('native', 'stockfish'):
@@ -85,6 +86,7 @@ class App:
         self.fonts = theme.load_fonts()
         self.assets = load_images(resource_path)
         self.sounds = SoundManager(resource_path)
+        self.sounds.set_muted(not sound_enabled)
 
         bot = ChessBot(max_depth=3, book_path=resource_path('data/book/gm2001.bin'))
         worker = BotWorker(bot)
@@ -95,6 +97,7 @@ class App:
             bot=bot, bot_worker=worker, stockfish_bot_worker=stockfish_worker,
             board_theme=board_theme,
             arrow_theme=arrow_theme, reduced_motion=reduced_motion,
+            sound_enabled=sound_enabled,
             stockfish_path=stockfish_path,
             bot_engine_pref=bot_engine_pref, bot_elo=bot_elo,
         )
@@ -149,6 +152,7 @@ class App:
         self.pref_board_rects: dict = {}
         self.pref_arrow_rects: dict = {}
         self.pref_motion_rect: pygame.Rect | None = None
+        self.pref_sound_rect: pygame.Rect | None = None
         self.pref_download_rect: pygame.Rect | None = None
         self.pref_engine_rects: dict = {}
         self.pref_focus = FocusGroup([])
@@ -160,12 +164,18 @@ class App:
         self.stockfish_download_error: str | None = None
 
         self.menu_btn_ingame_rect: pygame.Rect | None = None
-        self.menu_from_gameover_rect: pygame.Rect | None = None
+        self.gameover_btn_rects: dict | None = None
         self.overlay_cont_btn: pygame.Rect | None = None
         self.overlay_new_btn: pygame.Rect | None = None
         self.overlay_save_btn: pygame.Rect | None = None
         self.overlay_quit_btn: pygame.Rect | None = None
         self.overlay_export_btn: pygame.Rect | None = None
+        self.overlay_preferences_btn: pygame.Rect | None = None
+        self.overlay_draw_btn: pygame.Rect | None = None
+        self.overlay_resign_btn: pygame.Rect | None = None
+        self.confirm_yes_btn: pygame.Rect | None = None
+        self.confirm_cancel_btn: pygame.Rect | None = None
+        self._last_cursor = pygame.SYSTEM_CURSOR_ARROW
         self.pending_pgn_export_path: str | None = None
 
         self.pending_corrupt_error: str | None = None
@@ -466,7 +476,8 @@ class App:
         g = self.game
         save_io.write_preferences(g.board_theme, g.arrow_theme, g.reduced_motion,
                                   self._fullscreen, g.stockfish_path,
-                                  g.bot_engine_pref, g.bot_elo)
+                                  g.bot_engine_pref, g.bot_elo,
+                                  sound_enabled=g.sound_enabled)
 
     # ── Bootstrap entry point ───────────────────────────────────────────────
 
@@ -517,6 +528,7 @@ class App:
         # see a one-frame snap to the correct view rather than a stale view.
         self._enforce_pvp_orientation(now)
         self._render(dt)
+        self._update_cursor(*pygame.mouse.get_pos())
         pygame.display.flip()
 
     # ── Event dispatch ──────────────────────────────────────────────────────
@@ -592,7 +604,8 @@ class App:
         return (self.pending_corrupt_error is not None
                 or self.pending_analysis_missing_modal
                 or g.continue_new_overlay
-                or g.main_menu_overlay)
+                or g.main_menu_overlay
+                or g.confirm_dialog is not None)
 
     def _draw_focus_ring(self, focus_group: FocusGroup) -> None:
         """Draw a visible focus ring around the currently focused widget for
@@ -600,6 +613,48 @@ class App:
         if 0 <= focus_group.index < len(focus_group.widgets):
             focused = focus_group.widgets[focus_group.index]
             pygame.draw.rect(self.screen, FOCUS_RING, focused.rect, 3, border_radius=8)
+
+    def _update_cursor(self, mx: int, my: int) -> None:
+        """Show a hand cursor over anything clickable, an arrow otherwise.
+
+        Reuses the same rect collections already assembled this frame for
+        click handling and focus rings (the *_focus FocusGroups for the
+        picker/menu screens, and the individual rect attributes for
+        popups and the in-game HUD/history panel), so this can't drift
+        out of sync with what's actually clickable.
+        """
+        g = self.game
+        rects: list[pygame.Rect | None] = []
+
+        if g.confirm_dialog is not None:
+            rects += [self.confirm_yes_btn, self.confirm_cancel_btn]
+        elif g.continue_new_overlay:
+            rects += [self.overlay_cont_btn, self.overlay_new_btn]
+        elif g.main_menu_overlay:
+            rects += [self.overlay_save_btn, self.overlay_export_btn,
+                      self.overlay_preferences_btn, self.overlay_draw_btn,
+                      self.overlay_resign_btn, self.overlay_quit_btn]
+        elif self.pending_analysis_missing_modal:
+            rects.append(self.analysis_missing_ok_rect)
+        elif self.pending_corrupt_error is None:
+            focus_group = self.input._focus_group_for_state(g.state)
+            if focus_group is not None:
+                rects += [w.rect for w in focus_group.widgets]
+            if g.state in (GameState.PVP, GameState.BOT):
+                rects += [self.menu_btn_ingame_rect, self.analysis_toggle_rect]
+                if g.review.active:
+                    rects.append(self._live_btn_rect)
+                rects += [rect for rect, _ply in self._history_ply_rects]
+                if g.adapter is not None and g.adapter.promotion_pending:
+                    rects += [rect for rect, _pt in g.promo_rects]
+                if g.game_over and self.gameover_btn_rects:
+                    rects += list(self.gameover_btn_rects.values())
+
+        hovering = any(r is not None and r.collidepoint(mx, my) for r in rects)
+        cursor = pygame.SYSTEM_CURSOR_HAND if hovering else pygame.SYSTEM_CURSOR_ARROW
+        if cursor != self._last_cursor:
+            pygame.mouse.set_cursor(pygame.SYSTEM_CURSOR_HAND if hovering else pygame.SYSTEM_CURSOR_ARROW)
+            self._last_cursor = cursor
 
     def _render(self, dt: int) -> None:
         # When a popup is active, suppress hover highlighting on the base
@@ -673,13 +728,15 @@ class App:
         elif g.state == GameState.PREFERENCES:
             (self.pref_back_rect, self.pref_board_rects,
              self.pref_arrow_rects, self.pref_motion_rect,
-             self.pref_download_rect, self.pref_engine_rects) = render_menus.draw_preferences(
+             self.pref_download_rect, self.pref_engine_rects,
+             self.pref_sound_rect) = render_menus.draw_preferences(
                 self.screen, g.board_theme, g.arrow_theme, g.reduced_motion,
                 g.stockfish_path, self.fonts,
                 download_status=self.stockfish_download_status,
                 download_progress=self.stockfish_downloader.progress(),
                 download_error=self.stockfish_download_error,
                 bot_engine_pref=g.bot_engine_pref,
+                sound_enabled=g.sound_enabled,
             )
             pref_focusables = [FocusableRect(self.pref_back_rect, ('back', None))]
             pref_focusables += [
@@ -689,6 +746,7 @@ class App:
                 FocusableRect(rect, ('arrow', name)) for name, rect in self.pref_arrow_rects.items()
             ]
             pref_focusables.append(FocusableRect(self.pref_motion_rect, ('motion', None)))
+            pref_focusables.append(FocusableRect(self.pref_sound_rect, ('sound', None)))
             pref_focusables += [
                 FocusableRect(rect, ('engine', name)) for name, rect in self.pref_engine_rects.items()
             ]
@@ -707,10 +765,15 @@ class App:
                 self.screen, theme.WIN_W, theme.WIN_H, self.fonts
             )
         if g.main_menu_overlay and g.state in (GameState.PVP, GameState.BOT):
-            (self.overlay_save_btn, self.overlay_quit_btn,
-             self.overlay_export_btn) = render_menus.draw_main_menu_overlay(
+            (self.overlay_save_btn, self.overlay_export_btn,
+             self.overlay_preferences_btn, self.overlay_draw_btn,
+             self.overlay_resign_btn, self.overlay_quit_btn) = render_menus.draw_main_menu_overlay(
                 self.screen, self.fonts, theme.PANEL_X
             )
+            if g.confirm_dialog is not None:
+                self.confirm_yes_btn, self.confirm_cancel_btn = render_overlays.draw_confirm_modal(
+                    self.screen, theme.WIN_W, theme.WIN_H, g.confirm_dialog['message'], self.fonts,
+                )
         if self.pending_corrupt_error is not None:
             render_overlays.draw_error_modal(
                 self.screen, theme.WIN_W, theme.WIN_H, self.pending_corrupt_error, self.fonts
@@ -886,10 +949,16 @@ class App:
                     # (was `winner_alpha = min(winner_alpha + 3, 255)`, which
                     # took 1.4s at 60fps but 2.8s at 30fps).
                     g.winner_alpha = min(g.winner_alpha + dt * 0.18, 255)
-                self.menu_from_gameover_rect = render_overlays.draw_winner(
+                self.gameover_btn_rects = render_overlays.draw_winner(
                     self.screen, theme.WIN_W, theme.WIN_H, theme.PANEL_X,
                     g.winner_result, g.winner_alpha, self.fonts,
                 )
+            else:
+                self.gameover_btn_rects = None
+        else:
+            # In review mode the winner overlay isn't drawn (see above),
+            # so its buttons must not stay clickable underneath the board.
+            self.gameover_btn_rects = None
 
 
 def bootstrap() -> App:

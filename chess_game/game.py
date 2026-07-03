@@ -70,6 +70,7 @@ class Game:
     board_theme: str = "white_green"
     arrow_theme: str = "blue"
     reduced_motion: bool = False
+    sound_enabled: bool = True
     stockfish_path: str = ""
 
     # Always-on engine analysis mode (eval bar + PV arrows). The worker
@@ -116,6 +117,18 @@ class Game:
     pending_save_data: object = None
 
     main_menu_overlay: bool = False
+
+    # Set while a Yes/Cancel confirmation is pending on top of the in-game
+    # menu overlay (Resign / Offer Draw / Quit Without Saving all route
+    # through this rather than acting immediately, since all three are
+    # destructive/irreversible). {'action': str, 'message': str} or None.
+    confirm_dialog: dict | None = None
+
+    # Set to GameState.PVP or GameState.BOT when Preferences is opened from
+    # the in-game menu overlay, so the Preferences screen's Back button
+    # returns to the game in progress instead of always going to MENU.
+    # None means Preferences was opened from the main menu as usual.
+    preferences_return_state: GameState | None = None
 
     piece_imgs: dict = field(default_factory=dict)
 
@@ -358,6 +371,38 @@ class Game:
             return
         winner = "Black" if flagged == chess.WHITE else "White"
         self.winner_result = (f"{winner} Wins!", "on Time")
+        self.game_over = True
+
+    def resign(self, resigning_color: str) -> None:
+        """End the game as a resignation by `resigning_color` ("white" or
+        "black"). Mirrors tick_clock's flag-fall bookkeeping: set
+        winner_result + game_over, and cancel any in-flight bot thinking
+        so it can't post a move into a game that has already ended.
+
+        Callers are responsible for persisting/discarding the save
+        afterwards - resignation (like a draw by agreement) has no
+        representation in the replayable move stack, so App deletes the
+        save rather than writing one that would silently "un-resign" on
+        the next resume.
+        """
+        self.bot_worker.cancel()
+        self.bot_worker.join(timeout=2.0)
+        self.stockfish_bot_worker.cancel()
+        self.stockfish_bot_worker.join(timeout=2.0)
+        winner = "Black" if resigning_color == "white" else "White"
+        self.winner_result = (f"{winner} Wins!", "by Resignation")
+        self.game_over = True
+
+    def agree_draw(self) -> None:
+        """End the game as a draw by agreement. See `resign` for why the
+        bot worker is cancelled and why callers should discard rather than
+        write the save afterwards.
+        """
+        self.bot_worker.cancel()
+        self.bot_worker.join(timeout=2.0)
+        self.stockfish_bot_worker.cancel()
+        self.stockfish_bot_worker.join(timeout=2.0)
+        self.winner_result = ("Draw", "by Agreement")
         self.game_over = True
 
     def maybe_create_clock(self, time_control: str | None) -> None:

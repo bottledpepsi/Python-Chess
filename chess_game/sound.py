@@ -7,9 +7,19 @@ from chess_game.log import get_logger
 
 
 class SoundManager:
+    # Class-level default so instances created via SoundManager.__new__()
+    # (bypassing __init__, as some tests do) still have a sane value.
+    muted = False
+
     def __init__(self, resource_path_fn):
         self._sounds = {}
         self.audio_enabled = False
+        # User-facing mute toggle (Preferences → Sound Effects), distinct
+        # from audio_enabled (whether the mixer/device is actually
+        # available at all). Muting is a silent no-op in play(), not a
+        # mixer teardown, so toggling it back on doesn't need to reload
+        # or reinitialise anything.
+        self.muted = False
         logger = get_logger()
 
         if not pygame.mixer.get_init():
@@ -40,8 +50,11 @@ class SoundManager:
         if not self._sounds:
             logger.warning("No sound assets were loaded. System will remain silent.")
 
+    def set_muted(self, muted: bool) -> None:
+        self.muted = muted
+
     def play(self, name: str) -> None:
-        if not self.audio_enabled:
+        if not self.audio_enabled or self.muted:
             return
         s = self._sounds.get(name)
         if s:

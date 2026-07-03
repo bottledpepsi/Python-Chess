@@ -89,10 +89,11 @@ def test_draw_menus():
     for elo in (1320, 1500, 2200, 2800, 3190):
         menus.draw_stockfish_difficulty(screen, elo, fonts)
     (back_rect, board_rects, arrow_rects, motion_rect,
-     download_rect, engine_rects) = menus.draw_preferences(
+     download_rect, engine_rects, sound_rect) = menus.draw_preferences(
         screen, "white_green", "blue", False, "", fonts
     )
     assert download_rect is not None
+    assert sound_rect is not None
     assert set(engine_rects) == {"native", "stockfish"}
 
     # Both engine-preference states render without error.

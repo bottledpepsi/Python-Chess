@@ -46,13 +46,14 @@ A desktop chess game built with Python and pygame, powered by the `python-chess`
 - Scrollable move history panel with click-to-review navigation
 - Arrow drawing on the board (right-click drag) with configurable colour themes
 - Pawn promotion overlay strip with hover tooltips, keyboard-selectable (`Q/R/B/N`)
-- In-game menu overlay (save, export PGN, quit, return to main menu)
-- Game-over overlay with termination reason and result
+- In-game menu overlay: save & quit, open Preferences without leaving the game, export PGN, offer a draw, resign, or quit without saving — Resign/Offer Draw/Quit Without Saving all require a Yes/Cancel confirmation, since each is irreversible
+- Hand-cursor hover feedback over every clickable button, card, and toggle
+- Game-over overlay with termination reason and result, plus one-click **Rematch** (same colour/difficulty/time control, no need to go back through the pickers) and **Review Game**
 
 **Customisation**
 - Four board colour themes: Green, Blue, Red, and a colour-blind-safe option (deuteranopia-friendly)
 - Five arrow colour themes: Blue, Yellow, Green, White, Black
-- Redesigned preferences screen with card-based layout, high-contrast selected outlines, and a pill-style reduced-motion toggle
+- Redesigned preferences screen with card-based layout, high-contrast selected outlines, and pill-style reduced-motion / sound-effects toggles
 - Preferences persist between sessions
 
 **Review mode**
@@ -62,6 +63,7 @@ A desktop chess game built with Python and pygame, powered by the `python-chess`
 **Sound**
 - Move and capture sound effects via pygame mixer
 - Audio cues for check, checkmate, and draw using the existing sound assets
+- Mute toggle in Preferences (In-game menu → Preferences, or Main Menu → Preferences)
 
 **Save & resume**
 - Games (PvP and Bot) are auto-saved and can be resumed on next launch
@@ -188,7 +190,7 @@ Python-Chess/
         ├── trays.py             # Captured-piece trays
         ├── history.py           # Move-history panel
         ├── overlays.py          # Promotion, winner fade, modals
-        ├── menus.py             # Main menu, opponent picker, color/time-control pick, difficulty, preferences, in-game overlay (Save / Export PGN / Quit)
+        ├── menus.py             # Main menu, opponent picker, color/time-control pick, difficulty, preferences, in-game overlay (Save / Preferences / Export PGN / Offer Draw / Resign / Quit)
         └── arrows.py            # Right-click analysis arrows + best-move PV arrows
 ```
 
@@ -206,6 +208,11 @@ Python-Chess/
 | Step review forward | `→` arrow key |
 | Open in-game menu | `≡` Menu button (top-right of board) |
 | Export current game to PGN | In-game menu → **Export PGN** |
+| Open Preferences mid-game | In-game menu → **Preferences** (Back returns to the game, not the main menu) |
+| Offer a draw | In-game menu → **Offer Draw** → confirm |
+| Resign | In-game menu → **Resign** → confirm |
+| Rematch with the same settings | Game-over overlay → **Rematch** |
+| Review the game just played | Game-over overlay → **Review Game** |
 | Toggle fullscreen | `F11` |
 | Cancel / back out | `Esc` |
 | Navigate UI focus | `Tab` / `Shift+Tab` |

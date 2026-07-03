@@ -304,6 +304,214 @@ def test_export_pgn_button_writes_file_and_keeps_game_open(app, tmp_path, monkey
     assert app.game.adapter is not None
 
 
+# ── In-game menu overlay: Resign / Offer Draw / Quit confirmation ────────────
+
+def test_resign_button_opens_confirmation_without_ending_game(app):
+    """Clicking Resign must not end the game immediately — it should raise
+    a confirmation dialog first, since resigning is irreversible."""
+    app.game.state = GameState.BOT
+    app.game.player_color = 'white'
+    app.start_game()
+
+    app.game.main_menu_overlay = True
+    app._render(16)
+    assert app.overlay_resign_btn is not None
+    _click(app, *app.overlay_resign_btn.center)
+
+    assert app.game.confirm_dialog is not None
+    assert app.game.confirm_dialog['action'] == 'resign'
+    assert app.game.game_over is False
+
+
+def test_resign_confirmed_in_bot_game_awards_win_to_bot(app):
+    app.game.state = GameState.BOT
+    app.game.player_color = 'white'
+    app.start_game()
+
+    app.game.main_menu_overlay = True
+    app._render(16)
+    _click(app, *app.overlay_resign_btn.center)
+    app._render(16)
+    assert app.confirm_yes_btn is not None
+    _click(app, *app.confirm_yes_btn.center)
+
+    assert app.game.game_over is True
+    assert app.game.winner_result == ("Black Wins!", "by Resignation")
+    assert app.game.confirm_dialog is None
+    assert app.game.main_menu_overlay is False
+
+
+def test_resign_confirmed_in_pvp_game_credits_the_side_to_move(app):
+    app.game.state = GameState.PVP
+    app.start_game()
+    assert app.game.adapter.turn == 'white'
+
+    app.game.main_menu_overlay = True
+    app._render(16)
+    _click(app, *app.overlay_resign_btn.center)
+    app._render(16)
+    _click(app, *app.confirm_yes_btn.center)
+
+    assert app.game.winner_result == ("Black Wins!", "by Resignation")
+
+
+def test_offer_draw_confirmed_ends_game_as_draw(app):
+    app.game.state = GameState.BOT
+    app.game.player_color = 'white'
+    app.start_game()
+
+    app.game.main_menu_overlay = True
+    app._render(16)
+    assert app.overlay_draw_btn is not None
+    _click(app, *app.overlay_draw_btn.center)
+    app._render(16)
+    _click(app, *app.confirm_yes_btn.center)
+
+    assert app.game.game_over is True
+    assert app.game.winner_result == ("Draw", "by Agreement")
+
+
+def test_confirm_dialog_cancel_returns_to_menu_without_side_effects(app):
+    app.game.state = GameState.BOT
+    app.game.player_color = 'white'
+    app.start_game()
+
+    app.game.main_menu_overlay = True
+    app._render(16)
+    _click(app, *app.overlay_resign_btn.center)
+    app._render(16)
+    assert app.confirm_cancel_btn is not None
+    _click(app, *app.confirm_cancel_btn.center)
+
+    assert app.game.confirm_dialog is None
+    assert app.game.game_over is False
+    # Cancelling returns to the menu underneath, not the live board.
+    assert app.game.main_menu_overlay is True
+
+
+def test_esc_cancels_confirm_dialog_before_closing_menu(app):
+    app.game.state = GameState.BOT
+    app.game.player_color = 'white'
+    app.start_game()
+
+    app.game.main_menu_overlay = True
+    app._render(16)
+    _click(app, *app.overlay_resign_btn.center)
+    assert app.game.confirm_dialog is not None
+
+    _key(app, pygame.K_ESCAPE)
+    assert app.game.confirm_dialog is None
+    assert app.game.main_menu_overlay is True  # first Esc only dismisses the dialog
+
+    _key(app, pygame.K_ESCAPE)
+    assert app.game.main_menu_overlay is False
+
+
+def test_quit_without_saving_requires_confirmation_before_discarding(app, isolated_save_dir):
+    from chess_game import io as save_io
+
+    app.game.state = GameState.BOT
+    app.game.player_color = 'white'
+    app.start_game()
+    app.write_save()
+    assert save_io.read_save('bot') is not None
+
+    app.game.main_menu_overlay = True
+    app._render(16)
+    _click(app, *app.overlay_quit_btn.center)
+
+    # Still just a pending confirmation — nothing discarded yet.
+    assert app.game.confirm_dialog is not None
+    assert app.game.state == GameState.BOT
+    assert save_io.read_save('bot') is not None
+
+    app._render(16)
+    _click(app, *app.confirm_yes_btn.center)
+
+    assert app.game.state == GameState.MENU
+    assert save_io.read_save('bot') is None
+
+
+# ── In-game menu overlay: Preferences shortcut ────────────────────────────────
+
+def test_preferences_button_in_game_menu_returns_to_game_on_back(app):
+    app.game.state = GameState.PVP
+    app.start_game()
+
+    app.game.main_menu_overlay = True
+    app._render(16)
+    assert app.overlay_preferences_btn is not None
+    _click(app, *app.overlay_preferences_btn.center)
+
+    assert app.game.state == GameState.PREFERENCES
+    assert app.game.main_menu_overlay is False
+
+    app._render(16)
+    assert app.pref_back_rect is not None
+    _click(app, *app.pref_back_rect.center)
+
+    # Back returns to the PVP game in progress, not the main menu.
+    assert app.game.state == GameState.PVP
+    assert app.game.adapter is not None
+
+
+def test_sound_toggle_mutes_sound_manager_and_persists(app, isolated_save_dir):
+    from chess_game import io as save_io
+
+    assert app.game.sound_enabled is True
+    app.game.state = GameState.PREFERENCES
+    app._render(16)
+    assert app.pref_sound_rect is not None
+
+    _click(app, *app.pref_sound_rect.center)
+
+    assert app.game.sound_enabled is False
+    assert app.sounds.muted is True
+    assert save_io.read_preferences()['sound_enabled'] is False
+
+
+# ── Winner overlay: Rematch / Review Game / Main Menu ─────────────────────────
+
+def test_rematch_button_starts_new_bot_game_with_same_settings(app):
+    app.game.state = GameState.BOT
+    app.game.player_color = 'white'
+    app.game.bot_level = 4
+    app.start_game()
+    app.game.resign('white')  # quickest way to reach a game-over state
+    app.game.winner_alpha = 255
+
+    app._render(16)
+    assert app.gameover_btn_rects is not None
+    _click(app, *app.gameover_btn_rects['rematch'].center)
+
+    assert app.game.state == GameState.BOT
+    assert app.game.game_over is False
+    assert app.game.bot_level == 4  # settings carried over, no picker involved
+    assert app.game.adapter is not None
+    assert len(app.game.adapter.san_history) == 0
+
+
+def test_review_game_button_enters_review_and_hides_winner_overlay(app):
+    app.game.state = GameState.PVP
+    app.start_game()
+    mv = chess.Move.from_uci('e2e4')
+    fx, fy = _square_center(mv.from_square)
+    tx, ty = _square_center(mv.to_square)
+    _click(app, fx, fy)
+    _click(app, tx, ty)
+    app.game.resign('black')
+    app.game.winner_alpha = 255
+
+    app._render(16)
+    assert app.gameover_btn_rects is not None
+    _click(app, *app.gameover_btn_rects['review'].center)
+
+    assert app.game.review.active is True
+    # Entering review hides the winner overlay so the board is visible.
+    app._render(16)
+    assert app.gameover_btn_rects is None
+
+
 # ── Esc navigation ───────────────────────────────────────────────────────────
 
 def test_esc_backs_out_of_color_pick_to_opponent_pick(app):

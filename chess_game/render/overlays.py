@@ -93,15 +93,16 @@ def draw_promotion_overlay(screen, board_x, board_y, turn_color, fonts,
 
 
 def draw_winner(screen, win_w, win_h, panel_x, result, alpha, fonts):
-    """Draw the winner fade-in overlay. Returns the 'Main Menu' button rect,
-    or None if the button isn't visible yet (alpha is dt-scaled by
-    the caller, not incremented per-frame here)."""
+    """Draw the winner fade-in overlay. Returns a dict with 'rematch',
+    'review', and 'menu' rects once the buttons have faded in, or None
+    before then (alpha is dt-scaled by the caller, not incremented
+    per-frame here)."""
     headline, subtitle = result
     ov = pygame.Surface((win_w, win_h), pygame.SRCALPHA)
     ov.fill((0, 0, 0, min(int(alpha), 175)))
     screen.blit(ov, (0, 0))
 
-    menu_btn_rect = None
+    btn_rects = None
     if alpha > 80:
         a = min(255, (alpha - 80) * 5)
         cx = panel_x // 2
@@ -116,21 +117,39 @@ def draw_winner(screen, win_w, win_h, panel_x, result, alpha, fonts):
             ss.set_alpha(int(a))
             screen.blit(ss, ss.get_rect(center=(cx, cy + 8)))
         if a > 200:
-            bw, bh = 180, 42
-            btn = pygame.Rect(cx - bw // 2, cy + 44, bw, bh)
             mx_, my_ = pygame.mouse.get_pos()
-            hov = btn.collidepoint(mx_, my_)
-            bg = pygame.Surface((bw, bh), pygame.SRCALPHA)
-            bg.fill((60, 60, 60, 210) if hov else (40, 40, 40, 190))
-            screen.blit(bg, btn.topleft)
-            border_col = (160, 160, 160) if hov else (90, 90, 90)
-            pygame.draw.rect(screen, border_col, btn, 1, border_radius=8)
-            lbl = fonts.btn.render('Main Menu', True, (220, 220, 220) if hov else (170, 170, 170))
-            lbl.set_alpha(int(a))
-            screen.blit(lbl, lbl.get_rect(center=btn.center))
-            menu_btn_rect = btn
+            btn_w, btn_h, gap = 130, 42, 10
+            total_w = btn_w * 2 + gap
+            row_y = cy + 44
+            rematch_btn = pygame.Rect(cx - total_w // 2, row_y, btn_w, btn_h)
+            review_btn = pygame.Rect(cx - total_w // 2 + btn_w + gap, row_y, btn_w, btn_h)
+            menu_w = total_w
+            menu_btn = pygame.Rect(cx - menu_w // 2, row_y + btn_h + 10, menu_w, 36)
 
-    return menu_btn_rect
+            for btn, label, primary in (
+                (rematch_btn, 'Rematch', True),
+                (review_btn, 'Review', False),
+                (menu_btn, 'Main Menu', False),
+            ):
+                hov = btn.collidepoint(mx_, my_)
+                if primary:
+                    bg = (80, 130, 80, 230) if hov else (55, 95, 55, 210)
+                    border_col = (140, 200, 130) if hov else (95, 145, 90)
+                else:
+                    bg = (60, 60, 60, 210) if hov else (40, 40, 40, 190)
+                    border_col = (160, 160, 160) if hov else (90, 90, 90)
+                surf = pygame.Surface((btn.width, btn.height), pygame.SRCALPHA)
+                surf.fill(bg)
+                screen.blit(surf, btn.topleft)
+                pygame.draw.rect(screen, border_col, btn, 1, border_radius=8)
+                text_col = (225, 240, 220) if (primary and hov) else (220, 220, 220) if hov else (170, 170, 170)
+                lbl = fonts.btn.render(label, True, text_col)
+                lbl.set_alpha(int(a))
+                screen.blit(lbl, lbl.get_rect(center=btn.center))
+
+            btn_rects = {'rematch': rematch_btn, 'review': review_btn, 'menu': menu_btn}
+
+    return btn_rects
 
 
 def draw_continue_new_overlay(screen, win_w, win_h, fonts):
@@ -210,6 +229,62 @@ def draw_info_modal(screen, win_w, win_h, title_text, message, fonts):
     lbl = fonts.ov_btn.render('OK', True, (220, 220, 220))
     screen.blit(lbl, lbl.get_rect(center=ok_btn.center))
     return ok_btn
+
+
+def draw_confirm_modal(screen, win_w, win_h, message, fonts, confirm_label='Yes'):
+    """Draw a generic Yes/Cancel confirmation modal, layered on top of
+    whatever else is on screen (e.g. the in-game main-menu overlay).
+
+    Used for destructive/irreversible in-game actions - Resign, Offer
+    Draw, and Quit Without Saving - so a single misclick on the menu
+    below can't end or discard a game outright. Returns (yes_rect,
+    cancel_rect).
+    """
+    ov = pygame.Surface((win_w, win_h), pygame.SRCALPHA)
+    ov.fill((0, 0, 0, 120))
+    screen.blit(ov, (0, 0))
+
+    box_w, box_h = 380, 190
+    box = pygame.Rect((win_w - box_w) // 2, (win_h - box_h) // 2, box_w, box_h)
+    pygame.draw.rect(screen, (32, 30, 30), box, border_radius=12)
+    pygame.draw.rect(screen, (90, 78, 70), box, 1, border_radius=12)
+
+    title = fonts.ov_title.render('Are you sure?', True, (230, 220, 210))
+    screen.blit(title, title.get_rect(center=(box.centerx, box.y + 34)))
+
+    words = message.split(' ')
+    lines, cur = [], ''
+    for w in words:
+        trial = (cur + ' ' + w).strip()
+        if fonts.ov_sub.size(trial)[0] > box_w - 40:
+            lines.append(cur)
+            cur = w
+        else:
+            cur = trial
+    if cur:
+        lines.append(cur)
+    for i, line in enumerate(lines[:3]):
+        ls = fonts.ov_sub.render(line, True, (190, 180, 175))
+        screen.blit(ls, ls.get_rect(center=(box.centerx, box.y + 68 + i * 18)))
+
+    mx, my = pygame.mouse.get_pos()
+    btn_w, btn_h, gap = 140, 40, 16
+    cancel_btn = pygame.Rect(box.centerx - btn_w - gap // 2, box.bottom - 56, btn_w, btn_h)
+    yes_btn = pygame.Rect(box.centerx + gap // 2, box.bottom - 56, btn_w, btn_h)
+
+    hov = cancel_btn.collidepoint(mx, my)
+    pygame.draw.rect(screen, (55, 55, 55) if hov else (42, 42, 42), cancel_btn, border_radius=8)
+    pygame.draw.rect(screen, (90, 90, 90), cancel_btn, 1, border_radius=8)
+    lbl = fonts.ov_btn.render('Cancel', True, (220, 220, 220))
+    screen.blit(lbl, lbl.get_rect(center=cancel_btn.center))
+
+    hov = yes_btn.collidepoint(mx, my)
+    pygame.draw.rect(screen, (110, 55, 45) if hov else (85, 42, 35), yes_btn, border_radius=8)
+    pygame.draw.rect(screen, (170, 90, 75), yes_btn, 1, border_radius=8)
+    lbl = fonts.ov_btn.render(confirm_label, True, (240, 225, 220))
+    screen.blit(lbl, lbl.get_rect(center=yes_btn.center))
+
+    return yes_btn, cancel_btn
 
 
 def draw_error_modal(screen, win_w, win_h, message, fonts):

@@ -537,13 +537,14 @@ _ARROW_THEME_CHOICES = ['blue', 'yellow', 'green', 'white', 'black']
 
 def draw_preferences(screen, current_board_theme, current_arrow_theme, reduced_motion,
                      stockfish_path, fonts, download_status=None, download_progress=None,
-                     download_error=None, bot_engine_pref="native"):
-    """Returns (back_rect, board_rects, arrow_rects, motion_rect, download_rect, engine_rects).
+                     download_error=None, bot_engine_pref="native", sound_enabled=True):
+    """Returns (back_rect, board_rects, arrow_rects, motion_rect, download_rect,
+    engine_rects, sound_rect).
 
     Redesigned with a clean card-based layout: each preference group sits
     in its own rounded card with a heading, a one-line description, and a
-    row of large swatches. The reduced-motion toggle is a proper pill
-    switch rather than a checkbox.
+    row of large swatches. The reduced-motion and sound toggles are proper
+    pill switches rather than checkboxes, sharing one card side by side.
 
     download_status is one of None/'idle', 'downloading', 'done', 'error'
     — drives the Stockfish download button's label and colour.
@@ -642,24 +643,45 @@ def draw_preferences(screen, current_board_theme, current_arrow_theme, reduced_m
 
         arrow_rects[theme_name] = rect
 
-    # ── Reduced Motion card ────────────────────────────────────────────
-    motion_card = _section_card(416, 88, 'Reduced Motion', 'Skip piece-slide and board-flip animations.')
-    # Pill-style toggle switch on the right side of the card.
+    # ── Accessibility & Sound card ─────────────────────────────────────
+    # Two pill toggles side by side (Reduced Motion / Sound Effects)
+    # rather than two separate cards - the preferences screen is already
+    # laid out for a fixed WIN_H with no room to spare for another full
+    # card, and these two are similar enough in kind (on/off switches for
+    # sensory output) to read naturally as one group.
+    motion_card = _section_card(416, 88, 'Accessibility & Sound',
+                                'Skip animations, or turn off sound effects.')
     pill_w, pill_h = 64, 30
-    motion_rect = pygame.Rect(motion_card.right - pill_w - 24, motion_card.y + 50, pill_w, pill_h)
-    hov = motion_rect.collidepoint(mx, my)
-    # Track background: bright accent when on, neutral when off.
-    track_col = MENU_ACCENT_BRIGHT if reduced_motion else ((70, 70, 76) if hov else (50, 50, 56))
-    pygame.draw.rect(screen, track_col, motion_rect, border_radius=pill_h // 2)
-    # Knob: slides right when on, left when off.
-    knob_r = pill_h // 2 - 4
-    knob_x = motion_rect.right - knob_r - 4 if reduced_motion else motion_rect.x + knob_r + 4
-    pygame.draw.circle(screen, (235, 235, 235), (knob_x, motion_rect.centery), knob_r)
-    # Status label to the left of the pill.
+
+    def _pill_toggle(x_right, on):
+        rect = pygame.Rect(x_right - pill_w, motion_card.y + 50, pill_w, pill_h)
+        hov = rect.collidepoint(mx, my)
+        track_col = MENU_ACCENT_BRIGHT if on else ((70, 70, 76) if hov else (50, 50, 56))
+        pygame.draw.rect(screen, track_col, rect, border_radius=pill_h // 2)
+        knob_r = pill_h // 2 - 4
+        knob_x = rect.right - knob_r - 4 if on else rect.x + knob_r + 4
+        pygame.draw.circle(screen, (235, 235, 235), (knob_x, rect.centery), knob_r)
+        return rect
+
+    # Right-hand toggle: Sound Effects.
+    sound_rect = _pill_toggle(motion_card.right - 24, sound_enabled)
+    sound_status = 'On' if sound_enabled else 'Off'
+    sound_status_col = MENU_TEXT if sound_enabled else MENU_TEXT_SUB
+    sound_status_s = fonts.btn.render(sound_status, True, sound_status_col)
+    screen.blit(sound_status_s, sound_status_s.get_rect(midright=(sound_rect.x - 12, sound_rect.centery)))
+    sound_lbl_s = fonts.btn_sub.render('Sound Effects', True, MENU_TEXT_SUB)
+    screen.blit(sound_lbl_s, (sound_rect.x - 12 - sound_status_s.get_width() - 10 - sound_lbl_s.get_width(),
+                              sound_rect.centery - sound_lbl_s.get_height() // 2))
+
+    # Left-hand toggle: Reduced Motion, positioned so its own label sits
+    # clear of the sound toggle's label to its right.
+    motion_rect = _pill_toggle(motion_card.centerx - 6, reduced_motion)
     status = 'On' if reduced_motion else 'Off'
     status_col = MENU_TEXT if reduced_motion else MENU_TEXT_SUB
     status_s = fonts.btn.render(status, True, status_col)
     screen.blit(status_s, status_s.get_rect(midright=(motion_rect.x - 12, motion_rect.centery)))
+    motion_lbl_s = fonts.btn_sub.render('Reduced Motion', True, MENU_TEXT_SUB)
+    screen.blit(motion_lbl_s, (motion_card.x + 20, motion_rect.centery - motion_lbl_s.get_height() // 2))
 
     back_s = fonts.pick_s.render('\u2190 Back', True, MENU_TEXT_SUB)
     screen.blit(back_s, (18, 18))
@@ -774,35 +796,50 @@ def draw_preferences(screen, current_board_theme, current_arrow_theme, reduced_m
         done_s = fonts.btn_sub.render('Path updated automatically.', True, MENU_TEXT_SUB)
         screen.blit(done_s, (download_rect.right + 14, download_rect.centery - done_s.get_height() // 2))
 
-    return pygame.Rect(0, 0, 80, 36), board_rects, arrow_rects, motion_rect, download_rect, engine_rects
+    return pygame.Rect(0, 0, 80, 36), board_rects, arrow_rects, motion_rect, download_rect, engine_rects, sound_rect
 
 
 def draw_main_menu_overlay(screen, fonts, panel_x):
-    """In-game 'main menu' confirm overlay. Returns (save_btn, quit_btn, export_btn)."""
+    """In-game 'Game menu' overlay.
+
+    Returns (save_btn, export_btn, preferences_btn, draw_btn, resign_btn,
+    quit_btn). Resign and Quit Without Saving are both destructive/
+    irreversible, so neither acts immediately — the caller (InputHandler)
+    routes both through a Yes/Cancel confirmation (see
+    render.overlays.draw_confirm_modal) instead of ending the game or
+    discarding the save on a single misclick.
+    """
     ov = pygame.Surface((WIN_W, WIN_H), pygame.SRCALPHA)
     ov.fill((0, 0, 0, 200))
     screen.blit(ov, (0, 0))
 
     cx = panel_x // 2
     cy = WIN_H // 2
-    bw, bh = 310, 260
+    bw, bh = 320, 430
     box = pygame.Rect(cx - bw // 2, cy - bh // 2, bw, bh)
     pygame.draw.rect(screen, (30, 30, 30), box, border_radius=14)
     pygame.draw.rect(screen, (66, 66, 66), box, 2, border_radius=14)
 
-    t_s = fonts.ov_title.render('Main Menu', True, MENU_TEXT)
-    screen.blit(t_s, t_s.get_rect(center=(cx, cy - 91)))
+    t_s = fonts.ov_title.render('Game Menu', True, MENU_TEXT)
+    screen.blit(t_s, t_s.get_rect(center=(cx, box.y + 34)))
     s_s = fonts.ov_sub.render('What would you like to do?', True, MENU_TEXT_SUB)
-    screen.blit(s_s, s_s.get_rect(center=(cx, cy - 65)))
+    screen.blit(s_s, s_s.get_rect(center=(cx, box.y + 60)))
 
     mx_, my_ = pygame.mouse.get_pos()
-    bw2 = 210
-    save_btn = pygame.Rect(cx - bw2 // 2, cy - 37, bw2, 42)
-    export_btn = pygame.Rect(cx - bw2 // 2, cy + 15, bw2, 42)
-    quit_btn = pygame.Rect(cx - bw2 // 2, cy + 67, bw2, 42)
+    bw2, bh2, gap = 250, 42, 10
+    y0 = box.y + 90
+    save_btn = pygame.Rect(cx - bw2 // 2, y0, bw2, bh2)
+    preferences_btn = pygame.Rect(cx - bw2 // 2, y0 + (bh2 + gap), bw2, bh2)
+    export_btn = pygame.Rect(cx - bw2 // 2, y0 + 2 * (bh2 + gap), bw2, bh2)
+    draw_btn = pygame.Rect(cx - bw2 // 2, y0 + 3 * (bh2 + gap), bw2, bh2)
+    resign_btn = pygame.Rect(cx - bw2 // 2, y0 + 4 * (bh2 + gap), bw2, bh2)
+    quit_btn = pygame.Rect(cx - bw2 // 2, y0 + 5 * (bh2 + gap), bw2, bh2)
     for btn, label, font, accent in (
         (save_btn, 'Save & Quit', fonts.ov_btn, (65, 115, 65)),
+        (preferences_btn, 'Preferences', fonts.ov_btn_sm, (70, 70, 80)),
         (export_btn, 'Export PGN', fonts.ov_btn_sm, (60, 80, 120)),
+        (draw_btn, 'Offer Draw', fonts.ov_btn_sm, (110, 100, 55)),
+        (resign_btn, 'Resign', fonts.ov_btn_sm, (140, 85, 45)),
         (quit_btn, 'Quit Without Saving', fonts.ov_btn_sm, (130, 65, 55)),
     ):
         hov = btn.collidepoint(mx_, my_)
@@ -813,4 +850,4 @@ def draw_main_menu_overlay(screen, fonts, panel_x):
         l_s = font.render(label, True, MENU_TEXT)
         screen.blit(l_s, l_s.get_rect(center=btn.center))
 
-    return save_btn, quit_btn, export_btn
+    return save_btn, export_btn, preferences_btn, draw_btn, resign_btn, quit_btn

@@ -160,6 +160,10 @@ class InputHandler:
             self._handle_continue_new_overlay_event(event, mx, my)
             return
 
+        if g.confirm_dialog is not None:
+            self._handle_confirm_dialog_event(event, mx, my)
+            return
+
         if g.main_menu_overlay:
             self._handle_main_menu_overlay_event(event, mx, my)
             return
@@ -217,6 +221,9 @@ class InputHandler:
             g.continue_new_overlay = False
             g.pending_save_data = None
             return True
+        if g.confirm_dialog is not None:
+            g.confirm_dialog = None
+            return True
         if g.main_menu_overlay:
             g.main_menu_overlay = False
             return True
@@ -242,7 +249,8 @@ class InputHandler:
             return True
         if g.state == GameState.PREFERENCES:
             app.pref_focus.clear()
-            g.state = GameState.MENU
+            g.state = g.preferences_return_state or GameState.MENU
+            g.preferences_return_state = None
             return True
         if g.state in (GameState.PVP, GameState.BOT):
             if g.review.active:
@@ -300,19 +308,95 @@ class InputHandler:
                 # current game in progress.
                 app.export_pgn()
                 g.main_menu_overlay = False
-            elif app.overlay_quit_btn and app.overlay_quit_btn.collidepoint(mx, my):
-                mode_str = 'bot' if g.state == GameState.BOT else 'pvp'
-                save_io.delete_save(mode_str)
-                g.review.reset()
-                g.state = GameState.MENU
+            elif app.overlay_preferences_btn and app.overlay_preferences_btn.collidepoint(mx, my):
+                # Preferences' own Back button returns here (see
+                # Game.preferences_return_state), so the overlay itself
+                # can close now rather than staying "open" underneath.
+                g.preferences_return_state = g.state
                 g.main_menu_overlay = False
+                app.pref_focus.clear()
+                g.state = GameState.PREFERENCES
+            elif app.overlay_draw_btn and app.overlay_draw_btn.collidepoint(mx, my):
+                g.confirm_dialog = {
+                    'action': 'draw',
+                    'message': 'End the game as a draw by agreement?',
+                }
+            elif app.overlay_resign_btn and app.overlay_resign_btn.collidepoint(mx, my):
+                if g.state == GameState.PVP and g.adapter is not None:
+                    resigning = g.adapter.turn.capitalize()
+                    msg = f'{resigning} resigns and loses the game. Continue?'
+                else:
+                    msg = 'Resign this game? The bot will be awarded the win.'
+                g.confirm_dialog = {'action': 'resign', 'message': msg}
+            elif app.overlay_quit_btn and app.overlay_quit_btn.collidepoint(mx, my):
+                g.confirm_dialog = {
+                    'action': 'quit_without_saving',
+                    'message': "Discard this game without saving? This can't be undone.",
+                }
             else:
-                bx_chk = theme.PANEL_X // 2
-                by_chk = theme.WIN_H // 2
-                bw_chk, bh_chk = 310, 260
-                box_r = pygame.Rect(bx_chk - bw_chk // 2, by_chk - bh_chk // 2, bw_chk, bh_chk)
+                bw_chk, bh_chk = 320, 430
+                box_r = pygame.Rect(
+                    theme.PANEL_X // 2 - bw_chk // 2, theme.WIN_H // 2 - bh_chk // 2,
+                    bw_chk, bh_chk,
+                )
                 if not box_r.collidepoint(mx, my):
                     g.main_menu_overlay = False
+
+    def _start_rematch(self) -> None:
+        """Start a fresh game with the same settings as the one that just
+        ended (same PvP time control, or same bot colour/level/engine),
+        without sending the player back through the opponent/color/
+        difficulty pickers. Mirrors _confirm_difficulty /
+        _confirm_stockfish_difficulty / the PVP time-control confirm."""
+        app = self.app
+        g = app.game
+        if g.state == GameState.PVP:
+            g.board_flipped = False
+            app.start_game()
+            g.maybe_create_clock(g.time_control)
+        elif g.state == GameState.BOT:
+            app.start_game()
+            if g.player_color == 'black':
+                app.launch_bot_move()
+
+    def _handle_confirm_dialog_event(self, event, mx, my) -> None:
+        """Handle the Yes/Cancel confirmation raised for Resign, Offer
+        Draw, and Quit Without Saving. Cancelling (or clicking outside
+        both buttons) just clears the dialog and returns to the in-game
+        menu overlay underneath, without side effects."""
+        app = self.app
+        g = app.game
+        if event.type != pygame.MOUSEBUTTONDOWN or event.button != 1:
+            return
+        if app.confirm_yes_btn and app.confirm_yes_btn.collidepoint(mx, my):
+            self._perform_confirmed_action()
+        elif app.confirm_cancel_btn and app.confirm_cancel_btn.collidepoint(mx, my):
+            g.confirm_dialog = None
+
+    def _perform_confirmed_action(self) -> None:
+        app = self.app
+        g = app.game
+        assert g.confirm_dialog is not None
+        action = g.confirm_dialog['action']
+        g.confirm_dialog = None
+        g.main_menu_overlay = False
+        if action == 'resign':
+            resigning_color = g.adapter.turn if g.state == GameState.PVP else g.player_color
+            g.resign(resigning_color)
+            # Resignation (like a draw by agreement) has no representation
+            # in the replayable move stack a save is built from, so the
+            # save is discarded rather than written — see Game.resign.
+            mode_str = 'bot' if g.state == GameState.BOT else 'pvp'
+            save_io.delete_save(mode_str)
+        elif action == 'draw':
+            g.agree_draw()
+            mode_str = 'bot' if g.state == GameState.BOT else 'pvp'
+            save_io.delete_save(mode_str)
+        elif action == 'quit_without_saving':
+            mode_str = 'bot' if g.state == GameState.BOT else 'pvp'
+            save_io.delete_save(mode_str)
+            g.review.reset()
+            g.state = GameState.MENU
 
     def _handle_menu_event(self, event, mx, my) -> None:
         app = self.app
@@ -421,7 +505,7 @@ class InputHandler:
         save_io.write_preferences(g.board_theme, g.arrow_theme, g.reduced_motion,
                                   app._fullscreen, g.stockfish_path,
                                   g.bot_engine_pref, g.bot_elo,
-                                  app.tc_choice)
+                                  app.tc_choice, sound_enabled=g.sound_enabled)
 
     def _handle_color_pick_event(self, event, mx, my) -> None:
         app = self.app
@@ -559,6 +643,8 @@ class InputHandler:
                             break
                 if activated_key is None and app.pref_motion_rect and app.pref_motion_rect.collidepoint(mx, my):
                     activated_key = ('motion', None)
+                if activated_key is None and app.pref_sound_rect and app.pref_sound_rect.collidepoint(mx, my):
+                    activated_key = ('sound', None)
                 if (activated_key is None and app.pref_download_rect
                         and app.pref_download_rect.collidepoint(mx, my)):
                     activated_key = ('download_stockfish', None)
@@ -578,7 +664,10 @@ class InputHandler:
         kind, value = activated_key
         if kind == 'back':
             app.pref_focus.clear()
-            g.state = GameState.MENU
+            # Opened from the in-game menu -> return to the game in
+            # progress rather than always landing on the main menu.
+            g.state = g.preferences_return_state or GameState.MENU
+            g.preferences_return_state = None
             return
         changed = False
         if kind == 'board':
@@ -595,6 +684,10 @@ class InputHandler:
             if g.reduced_motion:
                 g.winner_alpha = 255
             changed = True
+        elif kind == 'sound':
+            g.sound_enabled = not g.sound_enabled
+            app.sounds.set_muted(not g.sound_enabled)
+            changed = True
         elif kind == 'download_stockfish':
             app._start_stockfish_download()
             return
@@ -605,7 +698,8 @@ class InputHandler:
         if changed:
             save_io.write_preferences(g.board_theme, g.arrow_theme, g.reduced_motion,
                                       app._fullscreen, g.stockfish_path,
-                                      g.bot_engine_pref, g.bot_elo)
+                                      g.bot_engine_pref, g.bot_elo,
+                                      sound_enabled=g.sound_enabled)
 
     def _complete_promotion(self, piece_type) -> None:
         """Complete a pending promotion with the given piece type, whether
@@ -670,10 +764,15 @@ class InputHandler:
                         if rect.collidepoint(mx, my):
                             enter_review(g, ply)
                             break
-            elif (g.game_over and app.menu_from_gameover_rect
-                  and app.menu_from_gameover_rect.collidepoint(mx, my)):
-                g.review.reset()
-                g.state = GameState.MENU
+            elif g.game_over and app.gameover_btn_rects:
+                rects = app.gameover_btn_rects
+                if rects['menu'].collidepoint(mx, my):
+                    g.review.reset()
+                    g.state = GameState.MENU
+                elif rects['rematch'].collidepoint(mx, my):
+                    self._start_rematch()
+                elif rects['review'].collidepoint(mx, my):
+                    enter_review(g, len(g.adapter.san_history))
             elif g.review.active or is_animating or g.game_over or flip_in_progress:
                 # While the board-flip animation is in-flight, block all piece
                 # interaction — the board is rotating and clicks would land on
