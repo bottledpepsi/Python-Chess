@@ -1,6 +1,7 @@
 """StockfishDownloader tests: platform detection, archive extraction
 (both flat and nested layouts, both .tar and .zip), path-traversal
-rejection, and the threaded download/extract/locate pipeline end to end.
+rejection, SHA-256 digest verification against GitHub's Releases API,
+and the threaded download/extract/locate pipeline end to end.
 
 No real network access happens in this suite — urllib.request.urlopen is
 always mocked with an in-memory fake response built from a real tarfile/
@@ -9,7 +10,9 @@ hand-rolled stand-in.
 """
 from __future__ import annotations
 
+import hashlib
 import io
+import json
 import sys
 import tarfile
 import threading
@@ -20,11 +23,15 @@ from pathlib import Path
 import pytest
 
 from chess_game.stockfish_download import (
+    DigestMismatchError,
     StockfishDownloader,
     UnsupportedPlatformError,
     _extract_archive,
+    _fetch_expected_digest,
     _find_extracted_binary,
     _is_within_directory,
+    _sha256_of_file,
+    _verify_digest,
     detect_platform_key,
 )
 
@@ -72,6 +79,45 @@ class _FakeResponse:
 def _patch_urlopen(monkeypatch, data: bytes, content_length: bool = True):
     def _fake_urlopen(request, timeout=None):
         return _FakeResponse(data, content_length=content_length)
+
+    monkeypatch.setattr(
+        "chess_game.stockfish_download.urllib.request.urlopen", _fake_urlopen
+    )
+
+
+class _FakeJsonResponse:
+    """Stands in for urlopen's context manager when the caller is
+    json.load()-ing the response directly (as _fetch_expected_digest
+    does), rather than streaming raw bytes via chunked .read(n)."""
+
+    def __init__(self, payload: object) -> None:
+        self._body = json.dumps(payload).encode("utf-8")
+
+    def read(self) -> bytes:
+        return self._body
+
+    def __enter__(self) -> _FakeJsonResponse:
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        return None
+
+
+def _patch_urlopen_by_host(monkeypatch, *, api_payload=None, api_exc=None,
+                            archive_data: bytes | None = None):
+    """Route urlopen based on which URL is being requested, so a single
+    test can control the GitHub API response and the archive download
+    response independently — mirroring what a real download actually
+    does (one call to each host)."""
+
+    def _fake_urlopen(request, timeout=None):
+        url = request.full_url if hasattr(request, "full_url") else str(request)
+        if "api.github.com" in url:
+            if api_exc is not None:
+                raise api_exc
+            return _FakeJsonResponse(api_payload)
+        assert archive_data is not None, "test must supply archive_data"
+        return _FakeResponse(archive_data)
 
     monkeypatch.setattr(
         "chess_game.stockfish_download.urllib.request.urlopen", _fake_urlopen
@@ -388,16 +434,30 @@ def test_double_start_does_not_spawn_a_second_download(monkeypatch, tmp_path):
     mocked pipeline could otherwise finish and reset `busy` before the
     second start() call, which would make a second call legitimately
     (and correctly) begin a fresh download, not a double-spawn.
+
+    A single successful run now makes two urlopen calls (the GitHub
+    digest-lookup API call, then the archive download itself), so this
+    counts archive-download requests specifically rather than every
+    urlopen call — the digest lookup happens after the archive download
+    unblocks (see _run's ordering), so it doesn't interfere with the
+    synchronisation this test relies on.
     """
     tar_bytes = _make_tar_bytes({"stockfish-ubuntu-x86-64": b"FAKE_BINARY" * 100000})
-    call_count = {"n": 0}
+    archive_call_count = {"n": 0}
     release_first_call = threading.Event()
 
     def _counting_blocking_urlopen(request, timeout=None):
-        call_count["n"] += 1
-        # Block the first call until the test explicitly releases it,
-        # guaranteeing downloader.busy stays True while the test attempts
-        # its second start() — no timing assumptions required.
+        url = request.full_url if hasattr(request, "full_url") else str(request)
+        if "api.github.com" in url:
+            # Let digest lookups through immediately and without
+            # affecting the archive-download call count this test cares
+            # about; digest verification itself is covered separately.
+            raise urllib.error.URLError("no digest lookups in this test")
+        archive_call_count["n"] += 1
+        # Block the first archive-download call until the test explicitly
+        # releases it, guaranteeing downloader.busy stays True while the
+        # test attempts its second start() — no timing assumptions
+        # required.
         release_first_call.wait(timeout=5.0)
         return _FakeResponse(tar_bytes)
 
@@ -414,7 +474,7 @@ def test_double_start_does_not_spawn_a_second_download(monkeypatch, tmp_path):
     release_first_call.set()
     downloader.join(timeout=5.0)
 
-    assert call_count["n"] == 1
+    assert archive_call_count["n"] == 1
 
 
 def test_take_result_consumes_once(monkeypatch, tmp_path):
@@ -572,6 +632,228 @@ def test_retry_after_failure_overwrites_previous_archive(monkeypatch, tmp_path):
     _patch_urlopen(monkeypatch, tar_bytes)
     downloader.start(tmp_path)
     downloader.join(timeout=5.0)
+    path, error = downloader.take_result()
+    assert error is None
+    assert path is not None
+
+
+# ── SHA-256 digest verification against GitHub's Releases API ──────────
+#
+# No checksum is ever hardcoded in chess_game.stockfish_download — these
+# tests verify the digest is instead fetched live from GitHub's Releases
+# API (the `digest` field GitHub itself computes at asset-upload time)
+# and the downloaded archive is checked against it.
+
+
+def test_fetch_expected_digest_returns_hex_from_api(monkeypatch):
+    """A well-formed API response with a populated `digest` field yields
+    the lowercase hex portion, independent of any hardcoded value in the
+    source — this only ever reflects whatever GitHub reports."""
+    fake_digest_hex = hashlib.sha256(b"whatever GitHub says today").hexdigest()
+    payload = {
+        "assets": [
+            {"name": "stockfish-ubuntu-x86-64.tar", "digest": f"sha256:{fake_digest_hex}"},
+        ]
+    }
+    _patch_urlopen_by_host(monkeypatch, api_payload=payload)
+
+    result = _fetch_expected_digest("stockfish-ubuntu-x86-64.tar")
+    assert result == fake_digest_hex
+
+
+def test_fetch_expected_digest_uppercase_is_normalised(monkeypatch):
+    """GitHub's digest casing shouldn't matter for the comparison later —
+    normalise to lowercase here so _verify_digest's equality check can't
+    fail on casing alone."""
+    fake_digest_hex = hashlib.sha256(b"some asset bytes").hexdigest()
+    payload = {
+        "assets": [
+            {"name": "stockfish-windows-x86-64.zip", "digest": f"sha256:{fake_digest_hex.upper()}"},
+        ]
+    }
+    _patch_urlopen_by_host(monkeypatch, api_payload=payload)
+
+    result = _fetch_expected_digest("stockfish-windows-x86-64.zip")
+    assert result == fake_digest_hex  # lowercase
+
+
+def test_fetch_expected_digest_returns_none_for_missing_asset(monkeypatch):
+    """The named asset isn't in the release's asset list at all — treat
+    as unverifiable, not as a match or a crash."""
+    payload = {"assets": [{"name": "some-other-file.tar", "digest": "sha256:abc123"}]}
+    _patch_urlopen_by_host(monkeypatch, api_payload=payload)
+
+    assert _fetch_expected_digest("stockfish-ubuntu-x86-64.tar") is None
+
+
+def test_fetch_expected_digest_returns_none_when_digest_is_null(monkeypatch):
+    """Releases published before GitHub started computing digests report
+    `digest: null` for their assets — this must be treated the same as
+    "unavailable", never as a hash to compare against."""
+    payload = {
+        "assets": [{"name": "stockfish-ubuntu-x86-64.tar", "digest": None}],
+    }
+    _patch_urlopen_by_host(monkeypatch, api_payload=payload)
+
+    assert _fetch_expected_digest("stockfish-ubuntu-x86-64.tar") is None
+
+
+def test_fetch_expected_digest_returns_none_on_network_error(monkeypatch):
+    """Any failure reaching the GitHub API (rate limit, DNS, timeout, ...)
+    must be swallowed into a None result, not propagate — this lookup is
+    a best-effort integrity check layered on top of the download, not a
+    hard dependency of it."""
+    _patch_urlopen_by_host(
+        monkeypatch, api_exc=urllib.error.URLError("API rate limit exceeded")
+    )
+
+    assert _fetch_expected_digest("stockfish-ubuntu-x86-64.tar") is None
+
+
+def test_fetch_expected_digest_returns_none_on_malformed_json(monkeypatch):
+    """A non-JSON or unexpectedly-shaped API response must not crash the
+    download thread — see _fetch_expected_digest's broad except."""
+    def _fake_urlopen(request, timeout=None):
+        class _BadResponse:
+            def read(self):
+                return b"not json at all {{{"
+            def __enter__(self):
+                return self
+            def __exit__(self, *a):
+                return None
+        return _BadResponse()
+
+    monkeypatch.setattr(
+        "chess_game.stockfish_download.urllib.request.urlopen", _fake_urlopen
+    )
+    assert _fetch_expected_digest("stockfish-ubuntu-x86-64.tar") is None
+
+
+def test_sha256_of_file_matches_hashlib(tmp_path):
+    """Sanity check against the stdlib directly — no reimplementation
+    quirks (chunk-size off-by-ones, wrong mode, etc.)."""
+    data = b"some archive bytes" * 10000
+    path = tmp_path / "archive.tar"
+    path.write_bytes(data)
+
+    assert _sha256_of_file(path) == hashlib.sha256(data).hexdigest()
+
+
+def test_verify_digest_passes_on_matching_hash(monkeypatch, tmp_path):
+    data = b"the real archive content"
+    archive = tmp_path / "stockfish-ubuntu-x86-64.tar"
+    archive.write_bytes(data)
+    correct_hex = hashlib.sha256(data).hexdigest()
+
+    payload = {
+        "assets": [{"name": "stockfish-ubuntu-x86-64.tar", "digest": f"sha256:{correct_hex}"}]
+    }
+    _patch_urlopen_by_host(monkeypatch, api_payload=payload)
+
+    _verify_digest(archive, "stockfish-ubuntu-x86-64.tar")  # must not raise
+
+
+def test_verify_digest_raises_on_mismatch(monkeypatch, tmp_path):
+    """The one case that actually matters: a downloaded archive whose
+    bytes don't match what GitHub says they should be (corruption, a
+    compromised CDN/mirror, tampering in transit, ...) must be rejected
+    outright rather than silently extracted."""
+    archive = tmp_path / "stockfish-ubuntu-x86-64.tar"
+    archive.write_bytes(b"tampered or corrupted content")
+
+    wrong_hex = hashlib.sha256(b"this is not what's in the file").hexdigest()
+    payload = {
+        "assets": [{"name": "stockfish-ubuntu-x86-64.tar", "digest": f"sha256:{wrong_hex}"}]
+    }
+    _patch_urlopen_by_host(monkeypatch, api_payload=payload)
+
+    with pytest.raises(DigestMismatchError):
+        _verify_digest(archive, "stockfish-ubuntu-x86-64.tar")
+
+
+def test_verify_digest_does_not_raise_when_digest_unavailable(monkeypatch, tmp_path):
+    """When GitHub's digest can't be determined, verification degrades
+    gracefully (falls back to the pinned-tag + HTTPS + path-traversal
+    protections already in place) instead of blocking every download
+    whenever the API is briefly unreachable."""
+    archive = tmp_path / "stockfish-ubuntu-x86-64.tar"
+    archive.write_bytes(b"some content")
+
+    _patch_urlopen_by_host(
+        monkeypatch, api_exc=urllib.error.URLError("temporarily unreachable")
+    )
+
+    _verify_digest(archive, "stockfish-ubuntu-x86-64.tar")  # must not raise
+
+
+def test_full_pipeline_succeeds_with_matching_digest(monkeypatch, tmp_path):
+    """End-to-end: StockfishDownloader.start() succeeds when the archive
+    it downloads matches the digest the (mocked) GitHub API reports for
+    it — the realistic "everything is fine" path."""
+    tar_bytes = _make_tar_bytes({"stockfish-ubuntu-x86-64": b"FAKE_BINARY" * 100000})
+    correct_hex = hashlib.sha256(tar_bytes).hexdigest()
+    payload = {
+        "assets": [{"name": "stockfish-ubuntu-x86-64.tar", "digest": f"sha256:{correct_hex}"}]
+    }
+    _patch_urlopen_by_host(monkeypatch, api_payload=payload, archive_data=tar_bytes)
+    monkeypatch.setattr("chess_game.stockfish_download.platform.system", lambda: "Linux")
+    monkeypatch.setattr("chess_game.stockfish_download.platform.machine", lambda: "x86_64")
+
+    downloader = StockfishDownloader()
+    downloader.start(tmp_path)
+    downloader.join(timeout=5.0)
+
+    path, error = downloader.take_result()
+    assert error is None
+    assert path is not None
+
+
+def test_full_pipeline_fails_closed_on_digest_mismatch(monkeypatch, tmp_path):
+    """End-to-end: if the (mocked) GitHub API reports a digest that
+    doesn't match the archive actually downloaded, the whole download
+    must fail — the archive must never be extracted, and no binary path
+    must ever be returned to the caller."""
+    tar_bytes = _make_tar_bytes({"stockfish-ubuntu-x86-64": b"FAKE_BINARY" * 100000})
+    wrong_hex = hashlib.sha256(b"a completely different payload").hexdigest()
+    payload = {
+        "assets": [{"name": "stockfish-ubuntu-x86-64.tar", "digest": f"sha256:{wrong_hex}"}]
+    }
+    _patch_urlopen_by_host(monkeypatch, api_payload=payload, archive_data=tar_bytes)
+    monkeypatch.setattr("chess_game.stockfish_download.platform.system", lambda: "Linux")
+    monkeypatch.setattr("chess_game.stockfish_download.platform.machine", lambda: "x86_64")
+
+    downloader = StockfishDownloader()
+    downloader.start(tmp_path)
+    downloader.join(timeout=5.0)
+
+    path, error = downloader.take_result()
+    assert path is None
+    assert error is not None and "Download failed" in error
+
+    # The rejected archive must not be left behind for a future retry to
+    # accidentally trust and extract without re-verifying.
+    leftover = tmp_path / "stockfish-ubuntu-x86-64.tar"
+    assert not leftover.exists()
+
+
+def test_full_pipeline_succeeds_when_digest_lookup_unavailable(monkeypatch, tmp_path):
+    """End-to-end: if GitHub's API can't be reached at all, the download
+    must still succeed (degrading to pinned-tag + HTTPS trust) rather
+    than making Stockfish permanently undownloadable whenever GitHub's
+    API has a transient outage or the user is rate-limited."""
+    tar_bytes = _make_tar_bytes({"stockfish-ubuntu-x86-64": b"FAKE_BINARY" * 100000})
+    _patch_urlopen_by_host(
+        monkeypatch,
+        api_exc=urllib.error.URLError("rate limited"),
+        archive_data=tar_bytes,
+    )
+    monkeypatch.setattr("chess_game.stockfish_download.platform.system", lambda: "Linux")
+    monkeypatch.setattr("chess_game.stockfish_download.platform.machine", lambda: "x86_64")
+
+    downloader = StockfishDownloader()
+    downloader.start(tmp_path)
+    downloader.join(timeout=5.0)
+
     path, error = downloader.take_result()
     assert error is None
     assert path is not None

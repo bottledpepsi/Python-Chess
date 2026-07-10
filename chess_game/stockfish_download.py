@@ -3,9 +3,23 @@
 This uses a background thread polled by the main loop, matching the
 worker pattern used elsewhere in the app. Only official Stockfish
 GitHub release assets are downloaded.
+
+Integrity
+---------
+No checksums are hardcoded in this file. Instead, each downloaded
+archive is verified against the SHA-256 digest GitHub itself computes
+and publishes for release assets (the `digest` field on the Releases
+API, populated automatically at upload time - see
+https://github.blog/changelog/2025-06-03-releases-now-expose-digests-for-release-assets/).
+This is fetched fresh from the GitHub API for the pinned release tag
+before the archive is trusted, so a hash never goes stale relative to
+the actual asset and nothing needs updating by hand when _RELEASE_TAG
+changes. See _fetch_expected_digest / _verify_digest below.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import platform
 import shutil
 import stat
@@ -22,6 +36,9 @@ from chess_game.log import get_logger
 # Asset filenames can change across Stockfish releases.
 _RELEASE_TAG = "sf_18"
 _RELEASE_BASE_URL = f"https://github.com/official-stockfish/Stockfish/releases/download/{_RELEASE_TAG}"
+_RELEASE_API_URL = (
+    f"https://api.github.com/repos/official-stockfish/Stockfish/releases/tags/{_RELEASE_TAG}"
+)
 
 # Use the plain platform asset variant, not a CPU-specific build.
 # This avoids launch failures on unsupported CPUs.
@@ -33,11 +50,18 @@ _ASSET_BY_PLATFORM = {
 }
 
 _DOWNLOAD_TIMEOUT_S = 30.0
+_API_TIMEOUT_S = 15.0
 _CHUNK_SIZE = 1 << 16  # 64 KiB
 
 
 class UnsupportedPlatformError(Exception):
     """Raised when the current OS/architecture has no known release asset."""
+
+
+class DigestMismatchError(Exception):
+    """Raised when a downloaded archive's SHA-256 doesn't match the digest
+    GitHub reports for that release asset. Treated the same as any other
+    download failure by callers - the archive is never extracted."""
 
 
 def detect_platform_key() -> str:
@@ -69,6 +93,105 @@ def _asset_url_for_current_platform() -> tuple[str, str]:
     key = detect_platform_key()
     asset_name = _ASSET_BY_PLATFORM[key]
     return asset_name, f"{_RELEASE_BASE_URL}/{asset_name}"
+
+
+def _fetch_expected_digest(asset_name: str) -> str | None:
+    """Look up asset_name's SHA-256 via the GitHub Releases API.
+
+    Returns the lowercase hex digest, or None if it can't be determined
+    (network error, rate limiting, or - for releases predating GitHub's
+    digest feature - a null `digest` field). None is a legitimate "can't
+    verify" result, not a hash; callers must not treat it as a match.
+
+    Nothing here is hardcoded: the tag is pinned (_RELEASE_TAG) but the
+    digest itself always comes fresh from GitHub, computed by GitHub at
+    upload time, so it can never drift out of sync with the real asset.
+    """
+    logger = get_logger()
+    request = urllib.request.Request(
+        _RELEASE_API_URL,
+        headers={
+            "User-Agent": "python-chess-game",
+            "Accept": "application/vnd.github+json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=_API_TIMEOUT_S) as response:
+            payload = json.load(response)
+    except Exception as exc:
+        # Deliberately broad: this is a best-effort integrity check, not
+        # the download itself, and must never let an unexpected failure
+        # mode here (network error, malformed JSON, an unusual response
+        # object, ...) escalate into failing the whole download. Any
+        # failure just means "can't verify this time" - see
+        # _verify_digest's fallback behaviour when this returns None.
+        logger.warning("Could not reach GitHub API for release digests: %s", exc)
+        return None
+
+    if not isinstance(payload, dict):
+        logger.warning("Unexpected GitHub API response shape for release digests")
+        return None
+
+    for asset in payload.get("assets", []):
+        if asset.get("name") != asset_name:
+            continue
+        digest = asset.get("digest")
+        if not digest or not isinstance(digest, str):
+            # Field exists on the schema but is null - e.g. a release
+            # published before GitHub started computing digests.
+            logger.warning(
+                "GitHub reports no digest for asset %s (release predates "
+                "digest support, or it hasn't propagated yet)", asset_name,
+            )
+            return None
+        # GitHub's digest field is formatted "sha256:<hex>".
+        algo, _, hex_digest = digest.partition(":")
+        if algo != "sha256" or not hex_digest:
+            logger.warning("Unexpected digest format for %s: %r", asset_name, digest)
+            return None
+        return hex_digest.lower()
+
+    logger.warning("Asset %s not found in GitHub release %s", asset_name, _RELEASE_TAG)
+    return None
+
+
+def _sha256_of_file(path: Path) -> str:
+    """Return the lowercase hex SHA-256 digest of the file at path."""
+    hasher = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(_CHUNK_SIZE), b""):
+            hasher.update(chunk)
+    return hasher.hexdigest()
+
+
+def _verify_digest(archive_path: Path, asset_name: str) -> None:
+    """Verify archive_path against the digest GitHub reports for
+    asset_name, raising DigestMismatchError on a mismatch.
+
+    If GitHub's digest can't be determined (see _fetch_expected_digest),
+    this logs a warning and returns without raising rather than blocking
+    every download whenever the API is briefly unreachable - the pinned
+    release tag, HTTPS transport, and archive path-traversal checks
+    elsewhere in this module still apply either way. A real mismatch
+    (the one case that actually indicates a tampered or corrupted
+    asset) always raises.
+    """
+    logger = get_logger()
+    expected = _fetch_expected_digest(asset_name)
+    if expected is None:
+        logger.warning(
+            "Skipping SHA-256 verification for %s (digest unavailable from "
+            "GitHub); proceeding on pinned-tag + HTTPS trust alone", asset_name,
+        )
+        return
+
+    actual = _sha256_of_file(archive_path)
+    if actual != expected:
+        raise DigestMismatchError(
+            f"SHA-256 mismatch for {asset_name}: expected {expected}, got {actual} "
+            "(downloaded archive does not match GitHub's published digest)"
+        )
+    logger.info("Verified %s against GitHub-published SHA-256 digest", asset_name)
 
 
 def _is_within_directory(dest_dir: Path, member_path: Path) -> bool:
@@ -201,6 +324,10 @@ class StockfishDownloader:
 
     def _run(self, install_dir: Path) -> None:
         logger = get_logger()
+        # Assigned as soon as the archive's destination path is known, so
+        # the except blocks below can clean up a partially-downloaded or
+        # digest-mismatched file even though it's set inside the try.
+        archive_path: Path | None = None
         try:
             asset_name, url = _asset_url_for_current_platform()
             install_dir.mkdir(parents=True, exist_ok=True)
@@ -208,6 +335,8 @@ class StockfishDownloader:
 
             logger.info("Downloading Stockfish from %s", url)
             self._download(url, archive_path)
+
+            _verify_digest(archive_path, asset_name)
 
             extract_dir = install_dir / "stockfish"
             if extract_dir.exists():
@@ -252,8 +381,17 @@ class StockfishDownloader:
                 self._done = True
                 self._busy = False
         except (OSError, urllib.error.URLError, zipfile.BadZipFile,
-                tarfile.TarError, ValueError) as exc:
+                tarfile.TarError, ValueError, DigestMismatchError) as exc:
             logger.warning("Stockfish download failed: %s", exc)
+            # Never leave a partially-downloaded or digest-mismatched
+            # archive on disk for a future retry to stumble over - the
+            # next start() should always fetch a fresh copy rather than
+            # risk re-extracting something that already failed here.
+            if archive_path is not None:
+                try:
+                    archive_path.unlink()
+                except OSError:
+                    pass
             with self._lock:
                 self._error = f"Download failed: {exc}"
                 self._result_path = None

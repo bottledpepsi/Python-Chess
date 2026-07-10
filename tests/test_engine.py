@@ -196,3 +196,112 @@ def test_evaluation_is_symmetric():
             f"black={black_score} for fen={board.fen()}"
         )
 
+
+# ── Search correctness (not just speed) ─────────────────────────────────
+#
+# test_null_move_pruning_speeds_up_deep_search (above) only checks that
+# null-move pruning makes the search faster; nothing in this file
+# previously checked that the search actually finds the *correct* move.
+# In particular, _alphabeta's PVS re-search windows use `min(beta, alpha
+# + 1)` / `max(alpha, beta - 1)` rather than the more standard `alpha +
+# 1` / `beta - 1` — when beta - alpha <= 1 this can collapse the
+# re-search window so the "did the null-window search actually fail
+# high/low" check is never satisfied even when a real re-search would
+# be warranted. These tests exercise ChessBot._search_top_n (the real
+# root-search entry point used by get_move, including the PVS-shaped
+# code in _alphabeta) against positions with a known, unambiguous best
+# move, so a future change to that windowing logic can't silently
+# regress correctness while "null-move pruning is still fast".
+
+
+def test_search_finds_forced_mate_in_one():
+    """A textbook back-rank mate-in-1 (Ra1-a8#) must be found and scored
+    as an immediate win. Verified independently: exhaustively checking
+    every legal move in this position confirms a1a8 is the *only* move
+    that gives checkmate."""
+    board = chess.Board(fen="6k1/5ppp/8/8/8/8/8/R5K1 w - - 0 1")
+
+    # Independent verification that a1a8 is the unique mating move, so
+    # this test's own fixture can't be wrong about what "correct" means
+    # here — it doesn't just trust the engine's answer.
+    mating_moves = []
+    for move in board.legal_moves:
+        board.push(move)
+        if board.is_checkmate():
+            mating_moves.append(move)
+        board.pop()
+    assert [m.uci() for m in mating_moves] == ["a1a8"], (
+        "test fixture assumption violated: expected a1a8 to be the "
+        "unique mate-in-1 in this position"
+    )
+
+    bot = ChessBot(book_path=None)
+    top_moves = bot._search_top_n(board, "white", depth=3, n=1)
+    assert top_moves, "search returned no moves at all"
+    best_score, best_move = top_moves[0]
+    assert best_move == chess.Move.from_uci("a1a8"), (
+        f"expected the search to find the forced mate a1a8, got {best_move.uci()}"
+    )
+    assert best_score == bot_mod.INF, (
+        f"expected the mating move to score exactly INF, got {best_score}"
+    )
+
+
+def test_search_prefers_capturing_undefended_queen():
+    """White's queen on d4 can capture Black's completely undefended
+    queen on h4 (Qxh4) — verified independently below that no black
+    piece attacks h4 at all. This is such a large, unambiguous material
+    swing (a full queen, ~9 points) that any correct search must rank
+    it far above every alternative at the root, regardless of search
+    depth or move ordering."""
+    board = chess.Board(fen="4k3/8/8/8/3Q3q/8/8/4K3 w - - 0 1")
+
+    # Independent verification of the fixture itself.
+    assert not list(board.attackers(chess.BLACK, chess.H4)), (
+        "test fixture assumption violated: expected h4 to be undefended"
+    )
+    capturing_move = chess.Move.from_uci("d4h4")
+    assert capturing_move in board.legal_moves
+
+    bot = ChessBot(book_path=None)
+    top_moves = bot._search_top_n(board, "white", depth=3, n=5)
+    assert top_moves, "search returned no moves at all"
+    best_score, best_move = top_moves[0]
+    assert best_move == capturing_move, (
+        f"expected the search to prefer capturing the hanging queen "
+        f"(d4h4), got {best_move.uci()} instead"
+    )
+    # The next-best alternative should trail by roughly a queen's worth
+    # of material (~900 centipawns here, given this engine's piece
+    # values) — a large enough margin that this can't pass by accident
+    # if move ordering or scoring were subtly broken.
+    if len(top_moves) > 1:
+        second_score = top_moves[1][0]
+        assert best_score - second_score > 500, (
+            f"expected capturing the hanging queen to score far above "
+            f"the next-best move, got best={best_score} second={second_score}"
+        )
+
+
+def test_search_result_is_deterministic_across_repeated_searches():
+    """Running the exact same search twice (fresh ChessBot instances, so
+    no shared TT/history state) on the same tactical position must
+    return the same best move both times. This guards against any
+    accidental nondeterminism creeping into move ordering or the PVS
+    re-search logic — a correct alpha-beta search is a pure function of
+    the position, depth, and move-generation order."""
+    fen = "4k3/8/8/8/3Q3q/8/8/4K3 w - - 0 1"
+
+    results = []
+    for _ in range(3):
+        board = chess.Board(fen=fen)
+        bot = ChessBot(book_path=None)
+        top_moves = bot._search_top_n(board, "white", depth=3, n=1)
+        results.append(top_moves[0])
+
+    first_score, first_move = results[0]
+    for score, move in results[1:]:
+        assert move == first_move and score == first_score, (
+            f"expected a deterministic result across repeated searches, "
+            f"got {[(s, m.uci()) for s, m in results]}"
+        )

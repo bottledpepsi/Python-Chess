@@ -725,3 +725,264 @@ def test_bot_game_never_gets_a_clock_even_with_saved_preference(app, isolated_sa
     app.game.state = GameState.BOT
     app.start_game()
     assert app.game.clock is None
+
+
+# ── QUIT event ───────────────────────────────────────────────────────────
+#
+# Previously entirely uncovered (input_handler.py:119-123). Exercises the
+# pygame.QUIT handler's worker-shutdown sequence before it calls
+# pygame.quit() + sys.exit() (mocked here so the test process itself
+# doesn't exit).
+
+def test_quit_event_cancels_native_bot_worker_and_stops_analysis_engine(app, monkeypatch):
+    """On pygame.QUIT, the native bot_worker must be cancelled/joined and
+    analysis_worker's engine subprocess must be stopped before exit."""
+    calls = []
+    monkeypatch.setattr(app.game.bot_worker, "cancel", lambda: calls.append("bot_cancel"))
+    monkeypatch.setattr(app.game.bot_worker, "join", lambda timeout=None: calls.append("bot_join"))
+    monkeypatch.setattr(app.analysis_worker, "stop_engine", lambda: calls.append("analysis_stop"))
+    monkeypatch.setattr(pygame, "quit", lambda: calls.append("pygame_quit"))
+    monkeypatch.setattr("sys.exit", lambda *a: (_ for _ in ()).throw(SystemExit))
+
+    with pytest.raises(SystemExit):
+        app._handle_event(pygame.event.Event(pygame.QUIT), 0, 0)
+
+    assert "bot_cancel" in calls
+    assert "bot_join" in calls
+    assert "analysis_stop" in calls
+    assert "pygame_quit" in calls
+
+
+def test_quit_event_does_not_stop_stockfish_bot_worker(app, monkeypatch):
+    """Documents a known gap rather than papering over it: the QUIT
+    handler currently shuts down the native bot_worker and the analysis
+    engine, but never cancels or stops game.stockfish_bot_worker (the
+    engine used to actually play bot moves when "Vs Bot" is set to
+    Stockfish). If a Stockfish search is in flight when the window is
+    closed, that subprocess is not cleanly terminated here.
+
+    This test asserts the *current* behaviour so a future fix is a
+    deliberate, visible change to this test rather than a silent one —
+    it is not an endorsement of leaving the subprocess unterminated.
+    """
+    calls = []
+    monkeypatch.setattr(app.game.bot_worker, "cancel", lambda: None)
+    monkeypatch.setattr(app.game.bot_worker, "join", lambda timeout=None: None)
+    monkeypatch.setattr(app.analysis_worker, "stop_engine", lambda: None)
+    monkeypatch.setattr(
+        app.game.stockfish_bot_worker, "cancel", lambda: calls.append("sf_cancel")
+    )
+    monkeypatch.setattr(
+        app.game.stockfish_bot_worker, "stop_engine", lambda: calls.append("sf_stop")
+    )
+    monkeypatch.setattr(pygame, "quit", lambda: None)
+    monkeypatch.setattr("sys.exit", lambda *a: (_ for _ in ()).throw(SystemExit))
+
+    with pytest.raises(SystemExit):
+        app._handle_event(pygame.event.Event(pygame.QUIT), 0, 0)
+
+    assert calls == [], (
+        "stockfish_bot_worker.cancel()/stop_engine() were called on QUIT — "
+        "if this now passes with calls made, update this test to assert "
+        "the (now fixed) cleanup instead of its absence."
+    )
+
+
+# ── Fullscreen toggle (F11) ───────────────────────────────────────────────
+#
+# Previously entirely uncovered (app.py:448-472). Under the dummy SDL
+# driver, pygame.display.toggle_fullscreen() reliably fails to return 1,
+# so this also exercises the display-recreation fallback path.
+
+def test_f11_toggles_fullscreen_flag_and_persists_preference(app, isolated_save_dir):
+    from chess_game import io as save_io
+
+    assert app._fullscreen is False
+    _key(app, pygame.K_F11)
+    assert app._fullscreen is True
+
+    prefs = save_io.read_preferences()
+    assert prefs.get("fullscreen") is True
+
+    _key(app, pygame.K_F11)
+    assert app._fullscreen is False
+    prefs = save_io.read_preferences()
+    assert prefs.get("fullscreen") is False
+
+
+def test_f11_works_regardless_of_current_screen(app):
+    """F11 is documented as working "at any time, regardless of what
+    screen or popup is active" — spot-check it from a non-menu state."""
+    app.game.state = GameState.PVP
+    app.game.confirm_dialog = {"action": "resign", "message": "Resign?"}
+    starting = app._fullscreen
+
+    _key(app, pygame.K_F11)
+
+    assert app._fullscreen is not starting
+    # The confirm dialog must be untouched — F11 is orthogonal to it.
+    assert app.game.confirm_dialog is not None
+
+
+# ── Analysis toggle + missing-engine modal ────────────────────────────────
+#
+# Previously entirely uncovered (app.py:216-229). No real Stockfish
+# binary is present in the test environment, so analysis_worker is
+# expected to be unavailable — this exercises the "engine not found"
+# branch organically rather than needing to fake a working engine.
+
+def test_toggle_analysis_on_shows_missing_engine_modal_when_unavailable(app):
+    assert app.game.analysis_enabled is False
+    assert app.game.analysis_missing_modal_shown is False
+
+    app._toggle_analysis()
+
+    assert app.game.analysis_enabled is True
+    if not app.analysis_worker.engine_available:
+        assert app.pending_analysis_missing_modal is True
+        assert app.game.analysis_missing_modal_shown is True
+
+
+def test_toggle_analysis_missing_modal_only_shown_once(app):
+    """A second toggle-off-then-on shouldn't re-trigger the modal once
+    it's already been shown this App lifetime."""
+    app._toggle_analysis()  # on
+    if not app.analysis_worker.engine_available:
+        app.pending_analysis_missing_modal = False  # simulate the user dismissing it
+        app._toggle_analysis()  # off
+        app._toggle_analysis()  # on again
+        assert app.pending_analysis_missing_modal is False
+
+
+def test_toggle_analysis_off_clears_eval_display_state(app):
+    app.game.analysis_enabled = True
+    app.game.analysis_eval = 150
+    app.game.eval_bar_display_ratio = 0.7
+
+    app._toggle_analysis()
+
+    assert app.game.analysis_enabled is False
+    assert app.game.eval_bar_display_ratio is None
+
+
+# ── Stockfish download start/poll ─────────────────────────────────────────
+#
+# Previously entirely uncovered (app.py:231-268).
+
+def test_start_stockfish_download_is_noop_while_already_busy(app, monkeypatch):
+    monkeypatch.setattr(
+        type(app.stockfish_downloader), "busy",
+        property(lambda self: True),
+    )
+    started = []
+    monkeypatch.setattr(app.stockfish_downloader, "start", lambda d: started.append(d))
+
+    app._start_stockfish_download()
+
+    assert started == []
+
+
+def test_poll_stockfish_download_no_result_is_noop(app, monkeypatch):
+    monkeypatch.setattr(app.stockfish_downloader, "take_result", lambda: None)
+    before = app.stockfish_download_status
+    app._poll_stockfish_download()
+    assert app.stockfish_download_status == before
+
+
+def test_poll_stockfish_download_error_sets_error_status(app, monkeypatch):
+    monkeypatch.setattr(
+        app.stockfish_downloader, "take_result", lambda: (None, "network error")
+    )
+    app._poll_stockfish_download()
+    assert app.stockfish_download_status == "error"
+    assert app.stockfish_download_error == "network error"
+
+
+def test_poll_stockfish_download_success_updates_engine_path(app, monkeypatch, isolated_save_dir):
+    """A successful download must update analysis_worker's engine path
+    and clear the "missing engine" one-shot latch so the modal can be
+    shown again if a *later* engine attempt also fails."""
+    app.game.analysis_missing_modal_shown = True
+    monkeypatch.setattr(
+        app.stockfish_downloader, "take_result",
+        lambda: ("/fake/path/to/stockfish", None),
+    )
+    stopped = []
+    monkeypatch.setattr(app.analysis_worker, "stop_engine", lambda: stopped.append(True))
+    set_paths = []
+    monkeypatch.setattr(
+        app.analysis_worker, "set_engine_path", lambda p: set_paths.append(p)
+    )
+
+    app._poll_stockfish_download()
+
+    assert app.stockfish_download_status == "done"
+    assert app.game.stockfish_path == "/fake/path/to/stockfish"
+    assert stopped == [True]
+    assert set_paths == ["/fake/path/to/stockfish"]
+    assert app.game.analysis_missing_modal_shown is False
+
+
+def test_poll_stockfish_download_success_does_not_update_bot_play_engine_path(app, monkeypatch):
+    """Documents a known gap: a successful download updates
+    analysis_worker's engine path but never calls set_engine_path on
+    game.stockfish_bot_worker (the engine actually used to play bot
+    moves when "Vs Bot" is set to Stockfish). A user who downloads
+    Stockfish and immediately plays against it in the same session will
+    still hit the old path on that worker.
+
+    Documents current behaviour deliberately, same as the QUIT-handler
+    test above — not an endorsement of leaving it unfixed.
+    """
+    monkeypatch.setattr(
+        app.stockfish_downloader, "take_result",
+        lambda: ("/fake/path/to/stockfish", None),
+    )
+    monkeypatch.setattr(app.analysis_worker, "stop_engine", lambda: None)
+    monkeypatch.setattr(app.analysis_worker, "set_engine_path", lambda p: None)
+    calls = []
+    monkeypatch.setattr(
+        app.game.stockfish_bot_worker, "set_engine_path",
+        lambda p: calls.append(p),
+    )
+
+    app._poll_stockfish_download()
+
+    assert calls == [], (
+        "game.stockfish_bot_worker.set_engine_path() was called after a "
+        "download — if this now passes with a call made, update this "
+        "test to assert the (now fixed) propagation instead of its "
+        "absence."
+    )
+
+
+# ── _frame() main-loop body ────────────────────────────────────────────────
+#
+# Previously entirely uncovered (app.py:496-532) — run() itself is an
+# infinite loop and isn't directly unit-testable, but _frame() is a
+# single iteration of its body and can be called directly.
+
+def test_frame_runs_one_iteration_without_error(app, monkeypatch):
+    """A smoke test that a single _frame() call completes cleanly from
+    the menu screen with no queued events — covers the per-frame
+    bookkeeping (drag safety-net, think-dots timer, bot/clock/analysis
+    polling, flip animation, render, cursor update) end to end."""
+    monkeypatch.setattr(pygame.event, "get", lambda: [])
+    app._frame()  # must not raise
+    assert app.game.state == GameState.MENU
+
+
+def test_frame_clears_stale_drag_state_when_mouse_released(app, monkeypatch):
+    """If drag_pending/drag_active is left set but the mouse button is no
+    longer held (e.g. the mouseup was swallowed by an overlay), _frame's
+    safety net must clear it so the next press starts cleanly."""
+    app.drag_pending = True
+    app.drag_active = True
+    app.drag_sq = chess.E2
+    monkeypatch.setattr(pygame.mouse, "get_pressed", lambda: (False, False, False))
+    monkeypatch.setattr(pygame.event, "get", lambda: [])
+
+    app._frame()
+
+    assert app.drag_pending is False
+    assert app.drag_active is False
