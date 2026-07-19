@@ -103,3 +103,101 @@ def test_draw_trays_both_orientations_with_captures():
     for flipped in (False, True):
         trays.draw_trays(surf, PANEL_X, WIN_H - TRAY_H, _FakeAdapter(), flipped,
                           fonts, {}, top_thinking=False, bottom_thinking=True, think_dots=2)
+
+
+class _FakeAdapterNoCaptures:
+    captured_pieces = {'white': [], 'black': []}
+
+    def material_advantage(self):
+        return (0, 0)
+
+
+def test_draw_trays_engine_notes_relabels_both_trays(monkeypatch):
+    """When engine_notes is given (ENGINE_MATCH mode), each tray's label
+    becomes "<Color> \u00b7 <note>" instead of the default
+    "<Color>'s captures", and its thinking message names that engine —
+    verified for both board orientations, since the note must follow the
+    *color*, not the screen position."""
+    calls = []
+    original_draw_tray = trays.draw_tray
+
+    def _spy_draw_tray(surface, panel_x, y0, pieces, label, fonts, tray_imgs,
+                        lead=0, thinking=False, think_dots=0, thinking_label='Bot is thinking'):
+        calls.append((label, thinking_label))
+        return original_draw_tray(surface, panel_x, y0, pieces, label, fonts, tray_imgs,
+                                   lead=lead, thinking=thinking, think_dots=think_dots,
+                                   thinking_label=thinking_label)
+
+    monkeypatch.setattr(trays, 'draw_tray', _spy_draw_tray)
+
+    fonts = load_fonts()
+    surf = pygame.Surface((WIN_W, WIN_H))
+    notes = {'white': 'Native (depth 4)', 'black': 'Stockfish (ELO 2200)'}
+
+    for flipped in (False, True):
+        calls.clear()
+        trays.draw_trays(surf, PANEL_X, WIN_H - TRAY_H, _FakeAdapterNoCaptures(), flipped,
+                          fonts, {}, top_thinking=True, bottom_thinking=True, think_dots=0,
+                          engine_notes=notes)
+        labels = {label for label, _ in calls}
+        thinking_labels = {t for _, t in calls}
+        assert "White \u00b7 Native (depth 4)" in labels
+        assert "Black \u00b7 Stockfish (ELO 2200)" in labels
+        assert any('Native (depth 4)' in t for t in thinking_labels)
+        assert any('Stockfish (ELO 2200)' in t for t in thinking_labels)
+
+
+def test_draw_trays_without_engine_notes_uses_default_labels(monkeypatch):
+    """PVP/BOT never pass engine_notes; confirms the default labels are
+    completely unchanged by this feature."""
+    calls = []
+    original_draw_tray = trays.draw_tray
+
+    def _spy_draw_tray(surface, panel_x, y0, pieces, label, fonts, tray_imgs,
+                        lead=0, thinking=False, think_dots=0, thinking_label='Bot is thinking'):
+        calls.append((label, thinking_label))
+        return original_draw_tray(surface, panel_x, y0, pieces, label, fonts, tray_imgs,
+                                   lead=lead, thinking=thinking, think_dots=think_dots,
+                                   thinking_label=thinking_label)
+
+    monkeypatch.setattr(trays, 'draw_tray', _spy_draw_tray)
+
+    fonts = load_fonts()
+    surf = pygame.Surface((WIN_W, WIN_H))
+    trays.draw_trays(surf, PANEL_X, WIN_H - TRAY_H, _FakeAdapterNoCaptures(), False,
+                      fonts, {}, top_thinking=True, bottom_thinking=True, think_dots=0)
+
+    labels = {label for label, _ in calls}
+    thinking_labels = {t for _, t in calls}
+    assert "White's captures" in labels
+    assert "Black's captures" in labels
+    assert thinking_labels == {'Bot is thinking'}
+
+
+def test_draw_tray_engine_note_label_and_thinking_text():
+    """draw_tray itself accepts an explicit thinking_label override —
+    this is the piece draw_trays' engine_notes wiring depends on, tested
+    directly so a regression here is caught even if draw_trays' own
+    internal label-selection logic changes shape later."""
+    surf = pygame.Surface((WIN_W, TRAY_H))
+    fonts = load_fonts()
+    trays.draw_tray(
+        surf, PANEL_X, 0, [], "White \u00b7 Native (depth 5)", fonts, {},
+        thinking=True, think_dots=1, thinking_label="Native (depth 5) is thinking",
+    )
+
+
+def test_draw_tray_default_thinking_label_is_unchanged():
+    """Regression guard: omitting thinking_label must still say "Bot is
+    thinking" exactly as before this parameter existed, so PVP/BOT (which
+    never pass it) render identically to pre-engine-match behaviour."""
+    surf = pygame.Surface((WIN_W, TRAY_H))
+    fonts = load_fonts()
+    # No assertion beyond "doesn't raise" is possible without pixel
+    # inspection, but the default argument value itself
+    # (thinking_label='Bot is thinking') is the actual regression
+    # surface — confirmed directly via the function signature default.
+    import inspect
+    sig = inspect.signature(trays.draw_tray)
+    assert sig.parameters['thinking_label'].default == 'Bot is thinking'
+    trays.draw_tray(surf, PANEL_X, 0, [], 'White', fonts, {}, thinking=True, think_dots=0)

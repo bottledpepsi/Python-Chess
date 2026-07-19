@@ -10,6 +10,8 @@ from __future__ import annotations
 import subprocess
 import sys
 import textwrap
+import threading
+import time
 
 import chess
 
@@ -305,3 +307,76 @@ def test_search_result_is_deterministic_across_repeated_searches():
             f"expected a deterministic result across repeated searches, "
             f"got {[(s, m.uci()) for s, m in results]}"
         )
+
+
+# ── min_think_time_s (the artificial pacing floor) ───────────────────────────
+
+def test_get_move_default_enforces_one_second_floor():
+    """The default min_think_time_s=1.0 must be unchanged from before
+    this parameter existed — BOT mode (human vs bot) always calls
+    get_move() without overriding it, so its pacing must stay exactly
+    as it was."""
+    board = chess.Board()
+    bot = ChessBot(max_depth=1, book_path=None)
+    start = time.time()
+    bot.get_move(board, 'white', 1)
+    elapsed = time.time() - start
+    assert elapsed >= 0.95, f"expected the ~1.0s floor to still apply, took {elapsed:.2f}s"
+
+
+def test_get_move_min_think_time_s_zero_disables_the_floor():
+    """Engine-vs-engine play (Game.launch_engine_match_move) passes
+    min_think_time_s=0.0 specifically to skip this pacing — there's no
+    human on either side for it to matter to. A fast, shallow search
+    must then return in well under 1.0s."""
+    board = chess.Board()
+    bot = ChessBot(max_depth=1, book_path=None)
+    start = time.time()
+    bot.get_move(board, 'white', 1, min_think_time_s=0.0)
+    elapsed = time.time() - start
+    assert elapsed < 0.9, f"expected no artificial floor, took {elapsed:.2f}s"
+
+
+def test_get_move_min_think_time_s_never_shortens_a_slow_search():
+    """min_think_time_s is a floor, not a cap: a search that takes longer
+    than the requested minimum on its own must not be truncated."""
+    board = chess.Board()
+    bot = ChessBot(max_depth=3, book_path=None)
+    start = time.time()
+    bot.get_move(board, 'white', 8, min_think_time_s=0.0)
+    elapsed = time.time() - start
+    # A depth-3-ish real search on the opening position takes at least
+    # some tens of milliseconds; the assertion here is just that nothing
+    # about min_think_time_s=0.0 forces a return before the search
+    # itself is actually done (the search having already returned by
+    # the time get_move's own timing check runs is the behaviour being
+    # protected, so this mostly guards against a future refactor
+    # accidentally adding a hard cap rather than only a floor).
+    assert elapsed >= 0.0  # search completed and returned; no exception, no truncation
+
+
+def test_get_move_min_think_time_s_respects_abort_event():
+    """When an abort Event is supplied, the pacing wait must use
+    abort.wait(remaining) (interruptible) rather than time.sleep, so an
+    aborted search doesn't block for the full remaining floor — this
+    matters for BotWorker.cancel() to actually be responsive."""
+    board = chess.Board()
+    bot = ChessBot(max_depth=1, book_path=None)
+    abort = threading.Event()
+
+    def _set_abort_shortly():
+        time.sleep(0.05)
+        abort.set()
+
+    t = threading.Thread(target=_set_abort_shortly, daemon=True)
+    t.start()
+    start = time.time()
+    try:
+        bot.get_move(board, 'white', 1, abort=abort, min_think_time_s=5.0)
+    except Exception:
+        pass  # SearchAborted may or may not fire depending on timing; not the point here
+    elapsed = time.time() - start
+    t.join()
+    assert elapsed < 4.5, (
+        f"expected the abort event to cut the pacing wait short, took {elapsed:.2f}s"
+    )

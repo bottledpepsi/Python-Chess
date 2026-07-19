@@ -532,11 +532,19 @@ class ChessBot:
         self._history.clear()
         self._reset_book()
 
-    def get_move(self, board, color, difficulty_level: int = 10, abort=None):
+    def get_move(self, board, color, difficulty_level: int = 10, abort=None,
+                 min_think_time_s: float = 1.0):
         """
         Return the selected move for *color* given the unified difficulty level.
-        Guaranteed to take at least 1.0 second before returning, unless the
-        search is aborted first.
+        Guaranteed to take at least min_think_time_s seconds before returning
+        (default 1.0s, matched to human-vs-bot play so a move never appears
+        to snap in instantly), unless the search is aborted first.
+
+        Callers that don't need this pacing at all — headless batch play,
+        or two engines playing each other with nobody watching a human
+        pace their own moves against it — can pass min_think_time_s=0.0 to
+        return as soon as the search itself finishes, with no artificial
+        floor. See Game.launch_engine_match_move for exactly this case.
 
         Parameters
         ----------
@@ -604,7 +612,7 @@ class ChessBot:
         final_move = _determine_move()
 
         elapsed = time.time() - start_time
-        remaining = 1.0 - elapsed
+        remaining = min_think_time_s - elapsed
         if remaining > 0:
             if abort is not None:
                 abort.wait(remaining)

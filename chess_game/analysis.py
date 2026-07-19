@@ -6,28 +6,12 @@ without crashing the app.
 """
 from __future__ import annotations
 
-import subprocess
-import sys
 import threading
-
 import chess
 import chess.engine
 
+from chess_game.engine.uci_utils import popen_uci as _popen_uci
 from chess_game.log import get_logger
-
-# On Windows, suppress the extra console window when spawning Stockfish.
-# getattr() avoids an attribute error on non-Windows platforms.
-_WINDOWS_CREATIONFLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else None
-
-
-def _popen_uci(engine_path: str) -> chess.engine.SimpleEngine:
-    """popen_uci wrapper that suppresses the blank console window a frozen
-    Windows build would otherwise spawn alongside the Stockfish process."""
-    if _WINDOWS_CREATIONFLAGS is not None:
-        return chess.engine.SimpleEngine.popen_uci(
-            engine_path, creationflags=_WINDOWS_CREATIONFLAGS
-        )
-    return chess.engine.SimpleEngine.popen_uci(engine_path)
 
 # Default search depth for a single analysis pass. Deep enough to be a
 # useful "what's best here" signal, shallow enough to return in well under

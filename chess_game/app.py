@@ -10,6 +10,7 @@ import os
 import sys
 
 import chess
+import chess.pgn
 import pygame
 
 from chess_game import io as save_io
@@ -93,8 +94,21 @@ class App:
         self.analysis_worker = AnalysisWorker(stockfish_path)
         stockfish_worker = StockfishBotWorker(stockfish_path)
         bot_elo = max(MIN_ELO, min(MAX_ELO, bot_elo))
+        # Engine-vs-engine match: two more independent native bots (same
+        # opening book as the BOT-mode bot above) and two more Stockfish
+        # workers pointed at the same configured stockfish_path — kept
+        # entirely separate from bot/worker/stockfish_worker above so a
+        # BOT-mode game and an ENGINE_MATCH game can never share TT state
+        # or a subprocess.
+        em_white_bot = ChessBot(max_depth=3, book_path=resource_path('data/book/gm2001.bin'))
+        em_black_bot = ChessBot(max_depth=3, book_path=resource_path('data/book/gm2001.bin'))
+        em_white_stockfish_worker = StockfishBotWorker(stockfish_path)
+        em_black_stockfish_worker = StockfishBotWorker(stockfish_path)
         self.game = Game(
             bot=bot, bot_worker=worker, stockfish_bot_worker=stockfish_worker,
+            em_white_bot=em_white_bot, em_black_bot=em_black_bot,
+            em_white_stockfish_worker=em_white_stockfish_worker,
+            em_black_stockfish_worker=em_black_stockfish_worker,
             board_theme=board_theme,
             arrow_theme=arrow_theme, reduced_motion=reduced_motion,
             sound_enabled=sound_enabled,
@@ -148,6 +162,19 @@ class App:
         self.sf_diff_slider_dragging = False
         self.sf_diff_focus = FocusGroup([])
 
+        # Engine Match setup screen (GameState.ENGINE_SETUP). Mouse/drag
+        # only for this first cut — deliberately no FocusGroup here. Every
+        # other sub-screen's focus group is a flat list of independent
+        # widgets; this screen has two full native/stockfish+slider units
+        # side by side, and giving that a correct Tab order is its own
+        # design task rather than a mechanical copy of the single-slider
+        # screens' pattern. Keyboard users can still reach this screen and
+        # back out of it (Tab/Enter just won't drive its controls yet).
+        self.em_setup_rects: dict = {}
+        self.em_setup_slider_info: dict = {}
+        self.em_setup_dragging_side: str | None = None  # None | "white" | "black"
+
+
         self.pref_back_rect: pygame.Rect | None = None
         self.pref_board_rects: dict = {}
         self.pref_arrow_rects: dict = {}
@@ -173,6 +200,10 @@ class App:
         self.overlay_preferences_btn: pygame.Rect | None = None
         self.overlay_draw_btn: pygame.Rect | None = None
         self.overlay_resign_btn: pygame.Rect | None = None
+        # Reduced 2-button variant of the overlay above, used only for
+        # GameState.ENGINE_MATCH (see draw_engine_match_menu_overlay).
+        self.em_overlay_export_btn: pygame.Rect | None = None
+        self.em_overlay_quit_btn: pygame.Rect | None = None
         self.confirm_yes_btn: pygame.Rect | None = None
         self.confirm_cancel_btn: pygame.Rect | None = None
         self._last_cursor = pygame.SYSTEM_CURSOR_ARROW
@@ -184,6 +215,12 @@ class App:
         # menu_btn_ingame_rect) and the one-time "Stockfish not found"
         # modal's OK button rect.
         self.analysis_toggle_rect: pygame.Rect | None = None
+        # Pause/Resume and Step controls — only drawn/clickable in
+        # GameState.ENGINE_MATCH (see the docstring on the drawing code
+        # in _render_game for why: neither has meaning in PVP/BOT, where
+        # a human is always the one deciding when to move).
+        self.em_pause_btn_rect: pygame.Rect | None = None
+        self.em_step_btn_rect: pygame.Rect | None = None
         self.pending_analysis_missing_modal: bool = False
         self.analysis_missing_ok_rect: pygame.Rect | None = None
 
@@ -308,6 +345,50 @@ class App:
             )
         except OSError:
             self.logger.exception('Failed to export PGN')
+
+    def export_engine_match_pgn(self) -> None:
+        """Export the current engine-vs-engine game's move history to a
+        PGN file, labelling both sides with their actual engine
+        configuration (e.g. "Native (depth 5)" / "Stockfish (ELO 1800)")
+        rather than routing through save_io.export_pgn, which always
+        labels both PVP/BOT sides "Player"/"Bot" — neither is correct
+        here since there's no human player on either side. Uses
+        chess.pgn directly, the same library save_io.export_pgn itself
+        wraps, just with headers this mode actually needs.
+        """
+        g = self.game
+        if g.adapter is None:
+            return
+
+        game = chess.pgn.Game()
+        game.headers['White'] = g.engine_match_label('white')
+        game.headers['Black'] = g.engine_match_label('black')
+        game.headers['Event'] = 'Engine Match'
+        game.headers['Result'] = g.adapter.board.result(claim_draw=True)
+        node: chess.pgn.GameNode = game
+        for move in g.adapter.board.move_stack:
+            node = node.add_variation(move)
+
+        path = save_io.pgn_export_path()
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, 'w', encoding='utf-8') as f:
+                print(game, file=f)
+        except OSError:
+            self.logger.exception('Failed to export engine-match PGN')
+
+    def stop_engine_match(self) -> None:
+        """Cancel both sides' engine-match workers. Called when quitting
+        an in-progress match back to the menu — there's no save to
+        write first (see Game's em_* fields docstring), so this is just
+        cleanup, unlike write_save()-then-quit on the PVP/BOT path."""
+        g = self.game
+        g.em_white_native_worker.cancel()
+        g.em_white_native_worker.join(timeout=2.0)
+        g.em_black_native_worker.cancel()
+        g.em_black_native_worker.join(timeout=2.0)
+        g.em_white_stockfish_worker.cancel()
+        g.em_black_stockfish_worker.cancel()
 
     def safe_read_save(self, mode: str):
         """Returns SaveData, or None, or sets pending_corrupt_error and
@@ -490,6 +571,12 @@ class App:
         finally:
             self.game.bot_worker.cancel()
             self.game.bot_worker.join(timeout=2.0)
+            self.game.em_white_native_worker.cancel()
+            self.game.em_white_native_worker.join(timeout=2.0)
+            self.game.em_black_native_worker.cancel()
+            self.game.em_black_native_worker.join(timeout=2.0)
+            self.game.em_white_stockfish_worker.cancel()
+            self.game.em_black_stockfish_worker.cancel()
             self.analysis_worker.stop_engine()
 
     def _frame(self) -> None:
@@ -512,6 +599,7 @@ class App:
             self._handle_event(event, mx, my)
 
         self._apply_bot_move()
+        self._apply_engine_match_move()
         self._tick_chess_clock()
         self.game.poll_analysis(self.analysis_worker)
         self._poll_stockfish_download()
@@ -558,6 +646,112 @@ class App:
             self.sounds.play_for_move_result(result, is_check=is_check, is_game_over=is_over)
             self.write_save()
             self._restart_analysis_if_enabled()
+
+    def _apply_engine_match_move(self) -> None:
+        """Per-frame poll for GameState.ENGINE_MATCH — mirrors
+        _apply_bot_move's animation/review guard and move-application
+        shape, but polls whichever of the two sides is actually on move
+        (both are engines; there's no human turn to wait for). Once a
+        move lands, the *other* side's think is launched on a later
+        frame (not launched directly from here — see the "does not
+        launch" note below), keeping the match running on its own with
+        no further input needed, unless paused.
+
+        Respects Game.em_paused / em_step_requested: pausing lets any
+        currently in-flight search finish and applies that move
+        (interrupting a live search mid-computation wastes the work for
+        no benefit), but withholds launching the *next* side's think
+        until Resume (em_paused cleared) or Step (one-shot
+        em_step_requested) — see the "nothing in flight" branch below,
+        which is the single place that decision is made.
+
+        Deliberately does not call write_save(): engine-vs-engine games
+        are not persisted as resumable saves (see Game's em_* fields
+        docstring) — only "Export PGN" from the in-game menu is available,
+        matching chess_game.engine.match's own fire-and-forget philosophy
+        rather than adding a third save-schema slot for a mode with no
+        "continue where I left off" need.
+        """
+        g = self.game
+        if g.state != GameState.ENGINE_MATCH:
+            return
+        assert g.adapter is not None
+        if g.game_over:
+            return
+        is_animating = g.anim is not None and g.anim.is_animating(pygame.time.get_ticks())
+        if is_animating or g.review.active:
+            return
+
+        if g.em_forfeit is not None:
+            self._end_engine_match_as_forfeit()
+            return
+
+        to_move = "white" if g.adapter.board.turn == chess.WHITE else "black"
+        to_move_epoch = g.em_white_epoch if to_move == "white" else g.em_black_epoch
+
+        if to_move_epoch is None:
+            # Nothing in flight for the side to move — this happens right
+            # after Start Match (nobody has been launched yet outside of
+            # _confirm_engine_match_setup's own initial launch), and after
+            # a paused match sat still with no pending search. Only start
+            # thinking if we're not paused, or if paused a Step was
+            # explicitly requested (consumed immediately so holding the
+            # button or a stray extra click doesn't queue multiple steps).
+            if g.em_paused and not g.em_step_requested:
+                return
+            g.em_step_requested = False
+            g.launch_engine_match_move(to_move)
+            return
+
+        move = g.poll_engine_match_move(to_move)
+        if g.em_forfeit is not None:
+            self._end_engine_match_as_forfeit()
+            return
+        if move is None:
+            return  # still thinking
+        if move not in g.adapter.board.legal_moves:
+            # Defensive: never trust an external process (Stockfish) or
+            # even the native engine blindly — an illegal move must end
+            # the match cleanly rather than corrupt adapter/board state,
+            # exactly like chess_game.engine.match.play_game's own
+            # illegal-move guard.
+            self.logger.error(
+                "Engine match: %s side returned illegal move %s in position %s",
+                to_move, move.uci(), g.adapter.board.fen(),
+            )
+            g.em_forfeit = to_move
+            self._end_engine_match_as_forfeit()
+            return
+
+        piece = g.adapter.board.piece_at(move.from_square)
+        img = g.piece_imgs.get((piece.piece_type, piece.color)) if piece else None
+        result = g.adapter.apply_move(move)
+        g.start_anim(g.adapter.anim_from, g.adapter.anim_to, img)
+        is_check = g.adapter.check_square is not None
+        is_over = g.adapter.is_game_over
+        self.sounds.play_for_move_result(result, is_check=is_check, is_game_over=is_over)
+        self._restart_analysis_if_enabled()
+        g.clear_engine_match_epoch(to_move)
+        # Deliberately does not launch the next side's think here: the
+        # top-of-function check above (to_move_epoch is None) runs again
+        # next frame for whichever side is now to move, and decides
+        # whether to launch it — respecting em_paused/em_step_requested
+        # in exactly one place instead of duplicating that decision here
+        # as well. A step that was just consumed to produce this move
+        # does not carry over to trigger a second move.
+
+    def _end_engine_match_as_forfeit(self) -> None:
+        """End the match when a side's engine turned out to be
+        unavailable (Stockfish failed to launch) or returned an illegal
+        move — same shape as Game.resign()'s bookkeeping, but there's no
+        "resigning player" to attribute it to in the same sense, so the
+        message names the engine's color directly."""
+        g = self.game
+        if g.game_over or g.em_forfeit is None:
+            return
+        winner = "Black" if g.em_forfeit == "white" else "White"
+        g.winner_result = (f"{winner} Wins!", "by Forfeit")
+        g.game_over = True
 
     def _tick_chess_clock(self) -> None:
         """Advance the PvP chess clock once per frame and handle flag-fall.
@@ -630,6 +824,8 @@ class App:
             rects += [self.confirm_yes_btn, self.confirm_cancel_btn]
         elif g.continue_new_overlay:
             rects += [self.overlay_cont_btn, self.overlay_new_btn]
+        elif g.main_menu_overlay and g.state == GameState.ENGINE_MATCH:
+            rects += [self.em_overlay_export_btn, self.em_overlay_quit_btn]
         elif g.main_menu_overlay:
             rects += [self.overlay_save_btn, self.overlay_export_btn,
                       self.overlay_preferences_btn, self.overlay_draw_btn,
@@ -640,8 +836,12 @@ class App:
             focus_group = self.input._focus_group_for_state(g.state)
             if focus_group is not None:
                 rects += [w.rect for w in focus_group.widgets]
-            if g.state in (GameState.PVP, GameState.BOT):
+            if g.state in (GameState.PVP, GameState.BOT, GameState.ENGINE_MATCH):
                 rects += [self.menu_btn_ingame_rect, self.analysis_toggle_rect]
+                if g.state == GameState.ENGINE_MATCH:
+                    rects.append(self.em_pause_btn_rect)
+                    if g.em_paused:
+                        rects.append(self.em_step_btn_rect)
                 if g.review.active:
                     rects.append(self._live_btn_rect)
                 rects += [rect for rect, _ply in self._history_ply_rects]
@@ -725,6 +925,11 @@ class App:
                 FocusableRect(self.sf_diff_confirm_rect, 'confirm'),
             ])
             self._draw_focus_ring(self.sf_diff_focus)
+        elif g.state == GameState.ENGINE_SETUP:
+            self.em_setup_rects, self.em_setup_slider_info = render_menus.draw_engine_match_setup(
+                self.screen, g.em_white_kind, g.em_white_level, g.em_white_elo,
+                g.em_black_kind, g.em_black_level, g.em_black_elo, self.fonts,
+            )
         elif g.state == GameState.PREFERENCES:
             (self.pref_back_rect, self.pref_board_rects,
              self.pref_arrow_rects, self.pref_motion_rect,
@@ -752,7 +957,7 @@ class App:
             ]
             self.pref_focus.rebuild(pref_focusables)
             self._draw_focus_ring(self.pref_focus)
-        elif g.state in (GameState.PVP, GameState.BOT):
+        elif g.state in (GameState.PVP, GameState.BOT, GameState.ENGINE_MATCH):
             self._render_game(dt)
 
     def _render_popups(self, dt: int) -> None:
@@ -774,6 +979,10 @@ class App:
                 self.confirm_yes_btn, self.confirm_cancel_btn = render_overlays.draw_confirm_modal(
                     self.screen, theme.WIN_W, theme.WIN_H, g.confirm_dialog['message'], self.fonts,
                 )
+        if g.main_menu_overlay and g.state == GameState.ENGINE_MATCH:
+            self.em_overlay_export_btn, self.em_overlay_quit_btn = render_menus.draw_engine_match_menu_overlay(
+                self.screen, self.fonts, theme.PANEL_X
+            )
         if self.pending_corrupt_error is not None:
             render_overlays.draw_error_modal(
                 self.screen, theme.WIN_W, theme.WIN_H, self.pending_corrupt_error, self.fonts
@@ -802,7 +1011,7 @@ class App:
 
     def _render_game(self, dt: int) -> None:
         g = self.game
-        assert g.adapter is not None  # guaranteed by g.state in (PVP, BOT)
+        assert g.adapter is not None  # guaranteed by g.state in (PVP, BOT, ENGINE_MATCH)
         now_ms = pygame.time.get_ticks()
         is_bot_mode = (g.state == GameState.BOT)
 
@@ -824,13 +1033,31 @@ class App:
             check_sq, last_move, sel_sq, targets, suppress,
         )
 
-        bot_color = 'black' if g.player_color == 'white' else 'white'
-        top_thinking = is_bot_mode and g.bot_thinking and bot_color == ('black' if not g.board_flipped else 'white')
-        bottom_thinking = is_bot_mode and g.bot_thinking and not top_thinking
+        is_engine_match = (g.state == GameState.ENGINE_MATCH)
+        if is_engine_match:
+            # Both sides are engines and either (or neither) may be
+            # thinking at once — unlike BOT mode's single bot_thinking
+            # flag, read each side's own worker state directly. Board
+            # orientation is always the standard White-at-bottom view
+            # (g.board_flipped is never set True for this mode — see
+            # _confirm_engine_match_setup), so top = Black, bottom = White.
+            top_thinking = g.engine_match_thinking('black')
+            bottom_thinking = g.engine_match_thinking('white')
+        else:
+            bot_color = 'black' if g.player_color == 'white' else 'white'
+            top_thinking = is_bot_mode and g.bot_thinking and bot_color == ('black' if not g.board_flipped else 'white')
+            bottom_thinking = is_bot_mode and g.bot_thinking and not top_thinking
 
+        engine_notes = None
+        if is_engine_match:
+            engine_notes = {
+                'white': g.engine_match_label('white'),
+                'black': g.engine_match_label('black'),
+            }
         render_trays.draw_trays(
             self.screen, theme.PANEL_X, theme.WIN_H - theme.TRAY_H, g.adapter, g.board_flipped,
             self.fonts, self.assets.tray_imgs, top_thinking, bottom_thinking, g.think_dots,
+            engine_notes=engine_notes,
         )
         # PvP-only; no-op for bot games and untimed PvP games (g.clock is
         # None in both cases). Drawn inside the same tray bars draw_trays
@@ -899,6 +1126,60 @@ class App:
             pygame.draw.rect(self.screen, an_brd, self.analysis_toggle_rect, 1, border_radius=6)
             an_s = self.fonts.igmenu.render('A', True, an_fg)
             self.screen.blit(an_s, an_s.get_rect(center=self.analysis_toggle_rect.center))
+
+            # Pause/Resume + Step controls, only meaningful in
+            # ENGINE_MATCH — placed immediately to the left of the
+            # analysis toggle, same 18px-tall row as Menu/A. Reset to
+            # None outside this mode so a stale rect from a previous
+            # ENGINE_MATCH game can't be clicked after leaving it (cursor
+            # hover / click routing both check "is not None" before
+            # using these).
+            if is_engine_match:
+                step_w, pause_w, btn_h = 46, 68, 18
+                self.em_step_btn_rect = pygame.Rect(
+                    self.analysis_toggle_rect.x - step_w - 6, 2, step_w, btn_h
+                )
+                self.em_pause_btn_rect = pygame.Rect(
+                    self.em_step_btn_rect.x - pause_w - 6, 2, pause_w, btn_h
+                )
+
+                pause_hov = self.em_pause_btn_rect.collidepoint(mx_, my_)
+                if g.em_paused:
+                    pause_bg = (96, 80, 40) if pause_hov else (82, 68, 32)
+                    pause_brd = (170, 140, 90)
+                    pause_fg = (240, 220, 190)
+                    pause_label = '\u25b6 Resume'
+                else:
+                    pause_bg = (52, 52, 52) if pause_hov else (42, 42, 42)
+                    pause_brd = (90, 90, 90) if pause_hov else (62, 62, 62)
+                    pause_fg = (210, 210, 210) if pause_hov else (140, 140, 140)
+                    pause_label = '\u23f8 Pause'
+                pygame.draw.rect(self.screen, pause_bg, self.em_pause_btn_rect, border_radius=6)
+                pygame.draw.rect(self.screen, pause_brd, self.em_pause_btn_rect, 1, border_radius=6)
+                pause_s = self.fonts.igmenu.render(pause_label, True, pause_fg)
+                self.screen.blit(pause_s, pause_s.get_rect(center=self.em_pause_btn_rect.center))
+
+                # Step only does anything while paused — dim it and make
+                # it non-interactive otherwise so it doesn't look like a
+                # working button that silently does nothing (see
+                # InputHandler._handle_engine_match_event's matching
+                # guard, which also only acts on it while g.em_paused).
+                step_hov = g.em_paused and self.em_step_btn_rect.collidepoint(mx_, my_)
+                if g.em_paused:
+                    step_bg = (52, 52, 52) if step_hov else (42, 42, 42)
+                    step_brd = (90, 90, 90) if step_hov else (62, 62, 62)
+                    step_fg = (210, 210, 210) if step_hov else (140, 140, 140)
+                else:
+                    step_bg = (32, 32, 32)
+                    step_brd = (46, 46, 46)
+                    step_fg = (78, 78, 78)
+                pygame.draw.rect(self.screen, step_bg, self.em_step_btn_rect, border_radius=6)
+                pygame.draw.rect(self.screen, step_brd, self.em_step_btn_rect, 1, border_radius=6)
+                step_s = self.fonts.igmenu.render('Step', True, step_fg)
+                self.screen.blit(step_s, step_s.get_rect(center=self.em_step_btn_rect.center))
+            else:
+                self.em_pause_btn_rect = None
+                self.em_step_btn_rect = None
 
             # Draw eval bar before the dragged piece so the dragged piece
             # renders on top of the eval bar.

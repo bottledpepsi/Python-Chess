@@ -31,6 +31,19 @@ class Game:
     # first use, same as AnalysisWorker.
     stockfish_bot_worker: StockfishBotWorker = field(default_factory=StockfishBotWorker)
 
+    # Dedicated workers for GameState.ENGINE_MATCH — see em_* fields above
+    # for why these are separate from bot_worker/stockfish_bot_worker.
+    # Mirrors the top-level `bot`/`bot_worker` pair exactly: the ChessBot
+    # instance is kept as its own field (so its TT can be cleared directly,
+    # the same way start_game() already does for `bot` above) and the
+    # BotWorker wraps that same instance rather than owning a private copy.
+    em_white_bot: ChessBot = field(default_factory=ChessBot)
+    em_white_native_worker: BotWorker = field(init=False)
+    em_white_stockfish_worker: StockfishBotWorker = field(default_factory=StockfishBotWorker)
+    em_black_bot: ChessBot = field(default_factory=ChessBot)
+    em_black_native_worker: BotWorker = field(init=False)
+    em_black_stockfish_worker: StockfishBotWorker = field(default_factory=StockfishBotWorker)
+
     state: GameState = GameState.MENU
     adapter: ChessAdapter | None = None
 
@@ -55,6 +68,40 @@ class Game:
     # Stockfish binary via stockfish_bot_worker, strength-limited by ELO.
     bot_engine_pref: str = "native"
     bot_elo: int = DEFAULT_ELO
+
+    # ── Engine-vs-engine match (GameState.ENGINE_SETUP / ENGINE_MATCH) ──
+    # Each side is configured independently (kind + level/ELO), unlike BOT
+    # mode where only the *bot's* side needs a choice. Two dedicated
+    # workers (not bot_worker/stockfish_bot_worker, which BOT mode owns)
+    # so White and Black can think concurrently without either blocking
+    # the render loop or interfering with a BOT-mode game's own workers.
+    em_white_kind: str = "native"       # "native" | "stockfish"
+    em_white_level: int = 5             # native depth 1-10
+    em_white_elo: int = DEFAULT_ELO
+    em_black_kind: str = "native"
+    em_black_level: int = 5
+    em_black_elo: int = DEFAULT_ELO
+    em_white_epoch: int | None = None
+    em_black_epoch: int | None = None
+    # Set once a side fails to produce a legal move (engine crashed, or —
+    # for Stockfish — the binary wasn't available to begin with) so the
+    # match ends cleanly as a forfeit rather than hanging forever waiting
+    # for a move that will never arrive. Mirrors chess_game.engine.match's
+    # own forfeit-on-no-move handling for the same reason.
+    em_forfeit: str | None = None  # None | "white" | "black"
+    # When True, _apply_engine_match_move still lets an in-flight search
+    # finish and applies its move (interrupting a search mid-computation
+    # would waste that work for no real benefit), but does not launch the
+    # following side's move afterward — the match sits at the resulting
+    # position until Resume (clears em_paused) or Step (see
+    # em_step_requested) is used. Toggled by the Pause/Resume button in
+    # the in-game controls row, visible only in ENGINE_MATCH.
+    em_paused: bool = False
+    # One-shot flag set by the Step button: "launch exactly one move, then
+    # go back to waiting even though em_paused is still True." Consumed
+    # (reset to False) the instant it's acted on, so holding the button
+    # down or clicking it again mid-think doesn't queue up extra steps.
+    em_step_requested: bool = False
 
     think_dots: int = 0
     think_timer: float = 0.0
@@ -138,6 +185,16 @@ class Game:
             return self.stockfish_bot_worker.thinking
         return self.bot_worker.thinking
 
+    def __post_init__(self) -> None:
+        """Wire each engine-match native worker to its own ChessBot
+        instance (kept as a separate top-level field so its TT can be
+        cleared directly in start_game(), exactly like `bot`/`bot_worker`
+        above) — dataclasses don't support deriving one default-factory
+        field from another's value directly, so this has to happen here
+        rather than in the field() declarations themselves."""
+        self.em_white_native_worker = BotWorker(self.em_white_bot)
+        self.em_black_native_worker = BotWorker(self.em_black_bot)
+
     def start_game(self) -> None:
         """Reset all per-game state for a fresh ChessAdapter (join the
         worker and clear the TT in the correct order)."""
@@ -146,6 +203,24 @@ class Game:
         self.stockfish_bot_worker.cancel()
         self.stockfish_bot_worker.join(timeout=2.0)
         self.bot.clear_tt()
+
+        # Engine-vs-engine workers: same cancel/join/clear-TT discipline,
+        # so restarting mid-match (or leaving ENGINE_MATCH for a fresh
+        # BOT/PVP game) can never let a stale search post a move into the
+        # wrong game.
+        self.em_white_native_worker.cancel()
+        self.em_white_native_worker.join(timeout=2.0)
+        self.em_black_native_worker.cancel()
+        self.em_black_native_worker.join(timeout=2.0)
+        self.em_white_stockfish_worker.cancel()
+        self.em_black_stockfish_worker.cancel()
+        self.em_white_bot.clear_tt()
+        self.em_black_bot.clear_tt()
+        self.em_white_epoch = None
+        self.em_black_epoch = None
+        self.em_forfeit = None
+        self.em_paused = False
+        self.em_step_requested = False
 
         self.adapter = ChessAdapter()
         self.winner_result = None
@@ -183,6 +258,102 @@ class Game:
         if self.bot_engine_pref == "stockfish":
             return self.stockfish_bot_worker.take(self.bot_epoch)
         return self.bot_worker.take(self.bot_epoch)
+
+    def _em_worker_for(self, color: str) -> tuple[BotWorker | StockfishBotWorker, bool | None]:
+        """Return (worker, engine_available_flag_or_None) for the given
+        side ("white"/"black"), picking native vs stockfish per that
+        side's own em_*_kind — independent of the other side's choice."""
+        kind = self.em_white_kind if color == "white" else self.em_black_kind
+        worker: BotWorker | StockfishBotWorker
+        if kind == "stockfish":
+            worker = self.em_white_stockfish_worker if color == "white" else self.em_black_stockfish_worker
+            return worker, worker.engine_available
+        worker = self.em_white_native_worker if color == "white" else self.em_black_native_worker
+        return worker, None  # native engine has no "unavailable" concept
+
+    def launch_engine_match_move(self, color: str) -> None:
+        """Start the given side's engine thinking on the current position.
+        No-op (leaves the epoch at None) if that side's engine turns out
+        to be unavailable — poll_engine_match_move notices this and marks
+        em_forfeit rather than the match hanging forever.
+
+        Native engines are started with min_think_time_s=0.0: the ~1.0s
+        floor in ChessBot.get_move exists purely to pace human-vs-bot
+        play (see get_move's own docstring) — it has no purpose in an
+        engine-vs-engine match where nobody is watching a human's own
+        moves against it, so it's disabled here rather than wasting real
+        wall-clock time every ply. Stockfish never had an equivalent
+        floor (StockfishBotWorker.start is already bounded purely by
+        movetime_ms, real search time rather than an artificial pad), so
+        the Stockfish path is unaffected by this.
+        """
+        assert self.adapter is not None
+        kind = self.em_white_kind if color == "white" else self.em_black_kind
+        level_or_elo = (
+            (self.em_white_elo if color == "white" else self.em_black_elo) if kind == "stockfish"
+            else (self.em_white_level if color == "white" else self.em_black_level)
+        )
+        if kind == "stockfish":
+            sf_worker = self.em_white_stockfish_worker if color == "white" else self.em_black_stockfish_worker
+            epoch = sf_worker.start(self.adapter.board, color, level_or_elo)
+        else:
+            native_worker = self.em_white_native_worker if color == "white" else self.em_black_native_worker
+            epoch = native_worker.start(self.adapter.board, color, level_or_elo, min_think_time_s=0.0)
+        if color == "white":
+            self.em_white_epoch = epoch
+        else:
+            self.em_black_epoch = epoch
+
+    def poll_engine_match_move(self, color: str) -> chess.Move | None:
+        """Return the given side's move if one is ready, or None if it's
+        still thinking. Sets em_forfeit (rather than returning a move)
+        if that side's engine is a Stockfish instance that turned out to
+        be unavailable — mirrors chess_game.engine.match's own
+        forfeit-on-no-move handling for the identical failure mode."""
+        epoch = self.em_white_epoch if color == "white" else self.em_black_epoch
+        if epoch is None:
+            return None
+        worker, engine_available = self._em_worker_for(color)
+        if engine_available is False and self.em_forfeit is None:
+            self.em_forfeit = color
+            return None
+        return worker.take(epoch)
+
+    def clear_engine_match_epoch(self, color: str) -> None:
+        """Reset the given side's epoch back to None once its move has
+        been consumed and applied to the board.
+
+        Without this, em_white_epoch/em_black_epoch just hold whatever
+        epoch each side's *first* launch used, forever — App's
+        "is anything in flight for the side to move" check
+        (to_move_epoch is None) would then only ever be True before a
+        side's very first move of the match, making Pause/Step silently
+        do nothing from the second move onward (each side's stale,
+        already-consumed epoch would look identical to "still thinking"
+        from the outside). Called right after a move is successfully
+        applied, before deciding whether to launch the next side."""
+        if color == "white":
+            self.em_white_epoch = None
+        else:
+            self.em_black_epoch = None
+
+    def engine_match_thinking(self, color: str) -> bool:
+        worker, _ = self._em_worker_for(color)
+        return worker.thinking
+
+    def engine_match_label(self, color: str) -> str:
+        """Describe the given side's configured engine and strength,
+        e.g. "Native (depth 5)" or "Stockfish (ELO 1800)". Single source
+        of truth for this formatting — both the in-game tray note
+        (render/trays.draw_trays) and App.export_engine_match_pgn's PGN
+        headers call this rather than each formatting it separately,
+        so the two can never drift out of sync with each other."""
+        kind = self.em_white_kind if color == "white" else self.em_black_kind
+        if kind == "stockfish":
+            elo = self.em_white_elo if color == "white" else self.em_black_elo
+            return f"Stockfish (ELO {elo})"
+        level = self.em_white_level if color == "white" else self.em_black_level
+        return f"Native (depth {level})"
 
     def launch_analysis(self, analysis_worker) -> None:
         """(Re)start engine analysis on the current position, if enabled.

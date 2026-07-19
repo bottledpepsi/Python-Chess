@@ -92,7 +92,7 @@ def draw_opponent_picker(screen, fonts, king_imgs):
     closer in spirit to a settings/list screen than a chooser.
 
     Returns (rects_by_key, back_rect) where rects_by_key is
-    {'player': rect, 'bot': rect}.
+    {'player': rect, 'bot': rect, 'engine_match': rect}.
     """
     screen.fill(MENU_BG)
     cx = WIN_W // 2
@@ -107,10 +107,10 @@ def draw_opponent_picker(screen, fonts, king_imgs):
     mx, my = pygame.mouse.get_pos()
     # Wide horizontal cards stacked vertically — visually nothing like the
     # color picker's two side-by-side squares.
-    card_w, card_h = 520, 120
+    card_w, card_h = 520, 100
     card_x = cx - card_w // 2
-    gap = 22
-    total_h = card_h * 2 + gap
+    gap = 18
+    total_h = card_h * 3 + gap * 2
     y0 = WIN_H // 2 - total_h // 2 + 30
 
     # Each card: (key, icon_img, icon_bg, title, subtitle, accent_color)
@@ -122,14 +122,18 @@ def draw_opponent_picker(screen, fonts, king_imgs):
         ('bot', king_imgs['black'], (90, 60, 90), 'Bot',
          'Challenge the computer. Pick a side and difficulty.',
          (180, 120, 200)),
+        ('engine_match', king_imgs['black'], (60, 70, 95), 'Engine Match',
+         'Watch two engines play each other. Configure both sides.',
+         (110, 160, 220)),
     ]
 
     # Pre-scale the king portraits down to fit inside the circular badge.
-    badge_r = 38
-    badge_inner = 60
+    badge_r = 34
+    badge_inner = 52
     scaled_icons = {
         'player': pygame.transform.smoothscale(king_imgs['white'], (badge_inner, badge_inner)),
         'bot': pygame.transform.smoothscale(king_imgs['black'], (badge_inner, badge_inner)),
+        'engine_match': pygame.transform.smoothscale(king_imgs['black'], (badge_inner, badge_inner)),
     }
 
     rects = {}
@@ -151,12 +155,13 @@ def draw_opponent_picker(screen, fonts, king_imgs):
         pygame.draw.circle(screen, accent, (badge_cx, badge_cy), badge_r, 2)
         screen.blit(scaled_icons[key], scaled_icons[key].get_rect(center=(badge_cx, badge_cy)))
 
-        # Title + subtitle to the right of the badge.
+        # Title + subtitle to the right of the badge, vertically centred
+        # within the (now shorter) card.
         text_x = badge_cx + badge_r + 22
         lbl = fonts.btn.render(label, True, MENU_TEXT)
-        screen.blit(lbl, (text_x, rect.y + 32))
+        screen.blit(lbl, (text_x, rect.centery - 24))
         sub = fonts.btn_sub.render(sublabel, True, MENU_TEXT_SUB)
-        screen.blit(sub, (text_x, rect.y + 64))
+        screen.blit(sub, (text_x, rect.centery + 6))
 
         # Right-side chevron hint that the card is clickable.
         chevron = '\u203a'  # ›
@@ -434,7 +439,178 @@ def draw_stockfish_difficulty(screen, elo, fonts):
     )
 
 
-# Six selectable time controls for PvP games: "none" (untimed) plus five
+def draw_engine_match_setup(screen, em_white_kind, em_white_level, em_white_elo,
+                             em_black_kind, em_black_level, em_black_elo, fonts):
+    """GameState.ENGINE_SETUP — configure both sides of an engine-vs-engine
+    match on one screen, side by side (White on the left, Black on the
+    right), rather than reusing draw_difficulty/draw_stockfish_difficulty
+    twice in sequence: both sides need to be visible and adjustable
+    together since there's no single "the bot" to configure one at a time.
+
+    Each column repeats the same two building blocks already used
+    elsewhere: the native/stockfish segmented toggle from draw_preferences'
+    "Bot Engine" card, and the slider track from draw_difficulty /
+    draw_stockfish_difficulty (both already accept an arbitrary sl_x/sl_w,
+    so no changes were needed there to run two side by side at half width).
+
+    Every element in a column is positioned from the previous element's
+    actual bottom edge (the same technique draw_difficulty itself uses),
+    rather than fixed offsets from a single anchor — a half-width column
+    has much less vertical headroom than a full-width screen, so offsets
+    copied from the single-slider screens (which assume the much larger
+    `win` font) overlapped here. The big readout number uses `diff_n`
+    (26px) instead of `win` (52px) for the same reason: `win` was sized
+    for a full-width screen with a whole screen's height to spend on it.
+
+    Returns a dict of interactive rects:
+        {
+          'back': rect, 'confirm': rect,
+          'white_engine': {'native': rect, 'stockfish': rect},
+          'black_engine': {'native': rect, 'stockfish': rect},
+          'white_slider': rect, 'black_slider': rect,
+        }
+    plus slider_info for each side (sl_x, sl_w, sl_y), returned alongside
+    as a second dict so App can convert a slider click's x-coordinate into
+    a level/ELO value exactly like the existing single-slider screens do.
+    """
+    screen.fill(MENU_BG)
+    cx = WIN_W // 2
+
+    title_s = fonts.pick.render('Engine Match Setup', True, MENU_TEXT)
+    screen.blit(title_s, title_s.get_rect(center=(cx, 56)))
+    sub_s = fonts.pick_s.render('Configure both sides, then start the match', True, MENU_TEXT_SUB)
+    screen.blit(sub_s, sub_s.get_rect(center=(cx, 84)))
+
+    col_w = 360
+    col_gap = 40
+    col_x = {'white': cx - col_gap // 2 - col_w, 'black': cx + col_gap // 2}
+    col_y = 116
+    sides = [
+        ('white', em_white_kind, em_white_level, em_white_elo, (235, 235, 230), (40, 40, 44)),
+        ('black', em_black_kind, em_black_level, em_black_elo, (225, 225, 225), (26, 26, 30)),
+    ]
+
+    rects: dict = {'white_engine': {}, 'black_engine': {}}
+    slider_info: dict = {}
+    mx, my = pygame.mouse.get_pos()
+    col_bottom = col_y  # tracks the lowest point reached by either column
+
+    for side, kind, level, elo, header_col, header_bg in sides:
+        x0 = col_x[side]
+        y = col_y
+
+        header = pygame.Rect(x0, y, col_w, 36)
+        pygame.draw.rect(screen, header_bg, header, border_radius=8)
+        label = fonts.btn.render(side.capitalize(), True, header_col)
+        screen.blit(label, label.get_rect(center=header.center))
+        y = header.bottom + 14
+
+        # Native/Stockfish segmented toggle, same visual language as
+        # draw_preferences' Bot Engine card.
+        seg_h = 32
+        seg_w = (col_w - 10) // 2
+        engine_rects = {}
+        for i, (key, seg_label) in enumerate((('native', 'Native'), ('stockfish', 'Stockfish'))):
+            rect = pygame.Rect(x0 + i * (seg_w + 10), y, seg_w, seg_h)
+            hov = rect.collidepoint(mx, my)
+            selected = (kind == key)
+            bg = MENU_ACCENT if selected else ((44, 44, 50) if hov else (36, 36, 42))
+            brd = MENU_ACCENT_BRIGHT if selected else ((90, 90, 98) if hov else (66, 66, 74))
+            pygame.draw.rect(screen, bg, rect, border_radius=8)
+            pygame.draw.rect(screen, brd, rect, 2 if selected else 1, border_radius=8)
+            lbl_col = MENU_TEXT if selected else MENU_TEXT_SUB
+            lbl_s = fonts.btn_sub.render(seg_label, True, lbl_col)
+            screen.blit(lbl_s, lbl_s.get_rect(center=rect.center))
+            engine_rects[key] = rect
+        rects[f'{side}_engine'] = engine_rects
+        y += seg_h + 22
+
+        if kind == 'stockfish':
+            col = elo_color(elo, MIN_ELO, MAX_ELO)
+            readout = str(elo)
+            tier = _elo_tier_label(elo)
+        else:
+            col = difficulty_color(level)
+            readout = str(level)
+            tier = DIFF_TIER[level]
+
+        # diff_n (26px), not win (52px): win was sized for a full-width
+        # screen with much more vertical room to spend on one number.
+        num_s = fonts.diff_n.render(readout, True, col)
+        screen.blit(num_s, num_s.get_rect(center=(x0 + col_w // 2, y + num_s.get_height() // 2)))
+        y += num_s.get_height() + 6
+
+        tier_s = fonts.diff_l.render(tier.upper(), True, col)
+        screen.blit(tier_s, tier_s.get_rect(center=(x0 + col_w // 2, y + tier_s.get_height() // 2)))
+        y += tier_s.get_height() + 20
+
+        # Slider: depth 1-10 for native, ELO for stockfish — same
+        # value/readout logic as draw_difficulty / draw_stockfish_difficulty,
+        # just at half the width and without that screen's own title block.
+        # sl_y is the slider's own vertical center; _draw_slider_track /
+        # _draw_elo_slider_track draw tick labels roughly 20-28px below it
+        # (see their own bodies), which the description text below must
+        # clear as well, not just the handle itself.
+        sl_x = x0 + 6
+        sl_w = col_w - 12
+        sl_y = y
+
+        if kind == 'stockfish':
+            _draw_elo_slider_track(screen, elo, MIN_ELO, MAX_ELO, sl_x, sl_w, sl_y, col, fonts)
+        else:
+            _draw_slider_track(screen, level, 1, 10, sl_x, sl_w, sl_y, col, fonts)
+        slider_rect = pygame.Rect(sl_x - 14, sl_y - 18, sl_w + 28, 36)
+        rects[f'{side}_slider'] = slider_rect
+        slider_info[side] = (sl_x, sl_w, sl_y)
+        # Both slider-track helpers draw their tick-value labels (fonts.count,
+        # 13px linesize) centered at sl_y + 20 and extending to roughly
+        # sl_y + 26; clear that before placing the description below.
+        y = sl_y + 26 + 18
+
+        desc = DIFF_DESC[level] if kind == 'native' else 'Full engine strength, limited to this ELO.'
+        desc_s = fonts.diff_s.render(desc, True, (155, 155, 155))
+        # Long descriptions (native mode's DIFF_DESC strings can run to
+        # ~60 chars) may not fit col_w at diff_s size — wrap onto a second
+        # line rather than letting it overflow into the neighbouring
+        # column or off the edge of the screen.
+        if desc_s.get_width() > col_w - 12:
+            words = desc.split(' ')
+            line1, line2 = [], []
+            target = words
+            half = len(target) // 2 + 1
+            line1, line2 = target[:half], target[half:]
+            for i, line_words in enumerate((line1, line2)):
+                if not line_words:
+                    continue
+                line_s = fonts.diff_s.render(' '.join(line_words), True, (155, 155, 155))
+                screen.blit(line_s, line_s.get_rect(center=(x0 + col_w // 2, y + i * 16)))
+            y += 16 + 16
+        else:
+            screen.blit(desc_s, desc_s.get_rect(center=(x0 + col_w // 2, y)))
+            y += 16
+
+        col_bottom = max(col_bottom, y)
+
+    divider_bottom = col_bottom + 14
+    pygame.draw.line(screen, (44, 44, 44), (cx, col_y + 4), (cx, divider_bottom), 1)
+
+    bw, bh = 220, 48
+    btn = pygame.Rect(cx - bw // 2, divider_bottom + 20, bw, bh)
+    hov = btn.collidepoint(mx, my)
+    bg_col = (58, 58, 92) if hov else (40, 40, 62)
+    pygame.draw.rect(screen, bg_col, btn, border_radius=10)
+    pygame.draw.rect(screen, MENU_ACCENT_BRIGHT if hov else MENU_ACCENT, btn, 2 if hov else 1, border_radius=10)
+    btn_lbl = fonts.btn.render('Start Match', True, MENU_TEXT)
+    screen.blit(btn_lbl, btn_lbl.get_rect(center=btn.center))
+    rects['confirm'] = btn
+
+    back_s = fonts.pick_s.render('\u2190 Back', True, MENU_TEXT_SUB)
+    screen.blit(back_s, (18, 18))
+    rects['back'] = pygame.Rect(0, 0, 80, 36)
+
+    return rects, slider_info
+
+
 # presets named "<minutes>+<increment-seconds>", matching chess_game.clock
 # .TIME_CONTROL_PRESETS. Order here is the on-screen grid order.
 TIME_CONTROL_CHOICES = ['none', '1+0', '3+2', '5+0', '10+0', '15+10']
@@ -851,3 +1027,58 @@ def draw_main_menu_overlay(screen, fonts, panel_x):
         screen.blit(l_s, l_s.get_rect(center=btn.center))
 
     return save_btn, export_btn, preferences_btn, draw_btn, resign_btn, quit_btn
+
+
+def draw_engine_match_menu_overlay(screen, fonts, panel_x):
+    """In-game menu overlay for GameState.ENGINE_MATCH — a reduced
+    2-button variant of draw_main_menu_overlay (Export PGN, Quit to Menu).
+
+    Save/Resign/Offer Draw don't apply here: there's no human player to
+    resign as or offer a draw to, and engine-vs-engine games aren't
+    persisted as resumable saves at all (see Game's em_* fields
+    docstring), so a "Save & Quit" button would imply a continue-later
+    flow that doesn't exist for this mode. Preferences is also omitted
+    for this first cut — board/arrow theme and sound still apply, but
+    reaching Preferences mid-match would need its own "return to
+    ENGINE_MATCH" plumbing (Game.preferences_return_state currently only
+    handles PVP/BOT) that's better done as its own change than bolted on
+    here.
+
+    Returns (export_btn, quit_btn), styled identically to their
+    counterparts in draw_main_menu_overlay so the two overlays feel like
+    the same family despite the shorter button list.
+    """
+    ov = pygame.Surface((WIN_W, WIN_H), pygame.SRCALPHA)
+    ov.fill((0, 0, 0, 200))
+    screen.blit(ov, (0, 0))
+
+    cx = panel_x // 2
+    cy = WIN_H // 2
+    bw, bh = 320, 180
+    box = pygame.Rect(cx - bw // 2, cy - bh // 2, bw, bh)
+    pygame.draw.rect(screen, (30, 30, 30), box, border_radius=14)
+    pygame.draw.rect(screen, (66, 66, 66), box, 2, border_radius=14)
+
+    t_s = fonts.ov_title.render('Match Menu', True, MENU_TEXT)
+    screen.blit(t_s, t_s.get_rect(center=(cx, box.y + 34)))
+    s_s = fonts.ov_sub.render('What would you like to do?', True, MENU_TEXT_SUB)
+    screen.blit(s_s, s_s.get_rect(center=(cx, box.y + 60)))
+
+    mx_, my_ = pygame.mouse.get_pos()
+    bw2, bh2, gap = 250, 42, 10
+    y0 = box.y + 90
+    export_btn = pygame.Rect(cx - bw2 // 2, y0, bw2, bh2)
+    quit_btn = pygame.Rect(cx - bw2 // 2, y0 + (bh2 + gap), bw2, bh2)
+    for btn, label, accent in (
+        (export_btn, 'Export PGN', (60, 80, 120)),
+        (quit_btn, 'Quit to Menu', (130, 65, 55)),
+    ):
+        hov = btn.collidepoint(mx_, my_)
+        bg = tuple(min(255, int(c * (0.48 if hov else 0.28))) for c in accent)
+        pygame.draw.rect(screen, bg, btn, border_radius=8)
+        brd = accent if hov else tuple(int(c * 0.58) for c in accent)
+        pygame.draw.rect(screen, brd, btn, 1, border_radius=8)
+        l_s = fonts.ov_btn_sm.render(label, True, MENU_TEXT)
+        screen.blit(l_s, l_s.get_rect(center=btn.center))
+
+    return export_btn, quit_btn

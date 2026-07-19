@@ -5,30 +5,13 @@ can be toggled independently without sharing the same subprocess.
 """
 from __future__ import annotations
 
-import subprocess
-import sys
 import threading
 
 import chess
 import chess.engine
 
+from chess_game.engine.uci_utils import popen_uci as _popen_uci
 from chess_game.log import get_logger
-
-# See analysis.py's identical helper for the full explanation: without this,
-# a windowed PyInstaller build on Windows pops a blank console window
-# whenever the Stockfish subprocess is spawned, because there's no parent
-# console for it to inherit. No-op on non-Windows platforms.
-_WINDOWS_CREATIONFLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else None
-
-
-def _popen_uci(engine_path: str) -> chess.engine.SimpleEngine:
-    """popen_uci wrapper that suppresses the blank console window a frozen
-    Windows build would otherwise spawn alongside the Stockfish process."""
-    if _WINDOWS_CREATIONFLAGS is not None:
-        return chess.engine.SimpleEngine.popen_uci(
-            engine_path, creationflags=_WINDOWS_CREATIONFLAGS
-        )
-    return chess.engine.SimpleEngine.popen_uci(engine_path)
 
 # Stockfish only accepts UCI_Elo within this range once UCI_LimitStrength is
 # enabled. Values are clamped to this window before being sent, so a caller

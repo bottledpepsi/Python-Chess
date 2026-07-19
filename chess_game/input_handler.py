@@ -118,6 +118,12 @@ class InputHandler:
         if event.type == pygame.QUIT:
             app.game.bot_worker.cancel()
             app.game.bot_worker.join(timeout=2.0)
+            app.game.em_white_native_worker.cancel()
+            app.game.em_white_native_worker.join(timeout=2.0)
+            app.game.em_black_native_worker.cancel()
+            app.game.em_black_native_worker.join(timeout=2.0)
+            app.game.em_white_stockfish_worker.cancel()
+            app.game.em_black_stockfish_worker.cancel()
             app.analysis_worker.stop_engine()
             pygame.quit()
             sys.exit()
@@ -130,7 +136,7 @@ class InputHandler:
 
         # Clear arrows only on a board click, not on every left click.
         if (event.type == pygame.MOUSEBUTTONDOWN and event.button == 1
-                and g.state in (GameState.PVP, GameState.BOT)):
+                and g.state in (GameState.PVP, GameState.BOT, GameState.ENGINE_MATCH)):
             bx, by = mx - theme.BOARD_X, my - theme.BOARD_Y
             if 0 <= bx < theme.BOARD_PX and 0 <= by < theme.BOARD_PX:
                 g.arrow_start_sq = None
@@ -169,7 +175,7 @@ class InputHandler:
             return
 
         if (event.type == pygame.MOUSEWHEEL and mx >= theme.PANEL_X
-                and g.state in (GameState.PVP, GameState.BOT)):
+                and g.state in (GameState.PVP, GameState.BOT, GameState.ENGINE_MATCH)):
             if g.adapter:
                 n_rows = (len(g.adapter.san_history) + 1) // 2
                 list_h = theme.WIN_H - theme.HIST_HDR_H - theme.HIST_FOOT_H
@@ -191,8 +197,12 @@ class InputHandler:
             self._handle_stockfish_difficulty_event(event, mx, my)
         elif g.state == GameState.PREFERENCES:
             self._handle_preferences_event(event, mx, my)
+        elif g.state == GameState.ENGINE_SETUP:
+            self._handle_engine_setup_event(event, mx, my)
         elif g.state in (GameState.PVP, GameState.BOT):
             self._handle_game_event(event, mx, my)
+        elif g.state == GameState.ENGINE_MATCH:
+            self._handle_engine_match_event(event, mx, my)
 
     def _focus_group_for_state(self, state) -> FocusGroup | None:
         """Return the FocusGroup that owns Tab-cycling for the given screen,
@@ -247,12 +257,15 @@ class InputHandler:
             app.sf_diff_focus.clear()
             g.state = GameState.COLOR_PICK
             return True
+        if g.state == GameState.ENGINE_SETUP:
+            g.state = GameState.OPPONENT_PICK
+            return True
         if g.state == GameState.PREFERENCES:
             app.pref_focus.clear()
             g.state = g.preferences_return_state or GameState.MENU
             g.preferences_return_state = None
             return True
-        if g.state in (GameState.PVP, GameState.BOT):
+        if g.state in (GameState.PVP, GameState.BOT, GameState.ENGINE_MATCH):
             if g.review.active:
                 exit_review(g)
                 return True
@@ -296,6 +309,9 @@ class InputHandler:
     def _handle_main_menu_overlay_event(self, event, mx, my) -> None:
         app = self.app
         g = app.game
+        if g.state == GameState.ENGINE_MATCH:
+            self._handle_engine_match_menu_overlay_event(event, mx, my)
+            return
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             if app.overlay_save_btn and app.overlay_save_btn.collidepoint(mx, my):
                 app.write_save()
@@ -335,6 +351,36 @@ class InputHandler:
                 }
             else:
                 bw_chk, bh_chk = 320, 430
+                box_r = pygame.Rect(
+                    theme.PANEL_X // 2 - bw_chk // 2, theme.WIN_H // 2 - bh_chk // 2,
+                    bw_chk, bh_chk,
+                )
+                if not box_r.collidepoint(mx, my):
+                    g.main_menu_overlay = False
+
+    def _handle_engine_match_menu_overlay_event(self, event, mx, my) -> None:
+        """Reduced-overlay counterpart of _handle_main_menu_overlay_event
+        for GameState.ENGINE_MATCH — see draw_engine_match_menu_overlay
+        for why Save/Draw/Resign don't apply to this mode.
+
+        Quit acts immediately (no confirm_dialog): unlike PVP/BOT's "Quit
+        Without Saving", there's no unsaved game to lose here — engine
+        matches were never going to be persisted as a resumable save in
+        the first place (see Game's em_* fields docstring), so there's
+        nothing a confirmation would be protecting the person from.
+        """
+        app = self.app
+        g = app.game
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            if app.em_overlay_export_btn and app.em_overlay_export_btn.collidepoint(mx, my):
+                app.export_engine_match_pgn()
+                g.main_menu_overlay = False
+            elif app.em_overlay_quit_btn and app.em_overlay_quit_btn.collidepoint(mx, my):
+                app.stop_engine_match()
+                g.main_menu_overlay = False
+                g.state = GameState.MENU
+            else:
+                bw_chk, bh_chk = 320, 180
                 box_r = pygame.Rect(
                     theme.PANEL_X // 2 - bw_chk // 2, theme.WIN_H // 2 - bh_chk // 2,
                     bw_chk, bh_chk,
@@ -456,6 +502,13 @@ class InputHandler:
                 g.continue_new_overlay = True
             elif app.pending_corrupt_error is None:
                 g.state = GameState.COLOR_PICK
+        elif activated_key == 'engine_match':
+            # No saved-match continuation: engine-vs-engine games are
+            # never persisted as resumable saves (see Game's em_* fields
+            # docstring), so this always goes straight to a fresh setup
+            # screen rather than checking for an existing save first.
+            app.opponent_focus.clear()
+            g.state = GameState.ENGINE_SETUP
 
     def _handle_time_control_pick_event(self, event, mx, my) -> None:
         """Handle the PvP time-control preset screen. Bot games never
@@ -624,6 +677,91 @@ class InputHandler:
         if g.player_color == 'black':
             app.launch_bot_move()
 
+    def _handle_engine_setup_event(self, event, mx, my) -> None:
+        """GameState.ENGINE_SETUP — configure both sides' engine kind and
+        level/ELO, then start the match. Mouse/drag only for this first
+        cut (see App.__init__'s em_setup_* fields for why there's no
+        FocusGroup / keyboard support here yet); Escape still works via
+        _handle_escape below regardless.
+
+        app.em_setup_dragging_side tracks which side's slider (if any) is
+        currently being dragged, since — unlike every single-slider
+        screen (diff_slider_dragging, sf_diff_slider_dragging) — there
+        are two independent sliders that could each be mid-drag here.
+        """
+        app = self.app
+        g = app.game
+        rects = app.em_setup_rects
+        if not rects:
+            return  # first frame after entering this state, nothing drawn yet
+
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            if rects.get('back') and rects['back'].collidepoint(mx, my):
+                g.state = GameState.OPPONENT_PICK
+                return
+            if rects.get('confirm') and rects['confirm'].collidepoint(mx, my):
+                self._confirm_engine_match_setup()
+                return
+            for side in ('white', 'black'):
+                engine_rects = rects.get(f'{side}_engine', {})
+                for kind, rect in engine_rects.items():
+                    if rect.collidepoint(mx, my):
+                        if side == 'white':
+                            g.em_white_kind = kind
+                        else:
+                            g.em_black_kind = kind
+                        return
+                slider_rect = rects.get(f'{side}_slider')
+                if slider_rect and slider_rect.collidepoint(mx, my):
+                    app.em_setup_dragging_side = side
+                    self._apply_engine_setup_slider_value(side, mx)
+                    return
+        elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+            app.em_setup_dragging_side = None
+        elif event.type == pygame.MOUSEMOTION:
+            if app.em_setup_dragging_side is not None:
+                self._apply_engine_setup_slider_value(app.em_setup_dragging_side, mx)
+
+    def _apply_engine_setup_slider_value(self, side: str, mx: int) -> None:
+        """Convert a slider click/drag x-coordinate into a level (native)
+        or ELO (stockfish) value for the given side, exactly like
+        _handle_difficulty_event / _handle_stockfish_difficulty_event do
+        for their own single slider — duplicated per-side here rather
+        than factored out since each side also has to pick which of its
+        two fields (level vs elo) the value even applies to."""
+        app = self.app
+        g = app.game
+        slider_info = app.em_setup_slider_info.get(side)
+        if not slider_info:
+            return
+        sl_x, sl_w, _sl_y = slider_info
+        t = max(0.0, min(1.0, (mx - sl_x) / sl_w))
+        kind = g.em_white_kind if side == 'white' else g.em_black_kind
+        if kind == 'stockfish':
+            value = int(round(MIN_ELO + t * (MAX_ELO - MIN_ELO)))
+            if side == 'white':
+                g.em_white_elo = value
+            else:
+                g.em_black_elo = value
+        else:
+            value = int(t * 9 + 0.5) + 1  # round half-up, not banker's rounding
+            if side == 'white':
+                g.em_white_level = value
+            else:
+                g.em_black_level = value
+
+    def _confirm_engine_match_setup(self) -> None:
+        """Start a fresh engine-vs-engine match with both sides'
+        currently-configured engine/level/ELO. Board orientation is
+        always the standard White-at-bottom view — there's no player
+        color to orient around, unlike BOT mode's board_flipped."""
+        app = self.app
+        g = app.game
+        g.board_flipped = False
+        g.state = GameState.ENGINE_MATCH
+        app.start_game()
+        g.launch_engine_match_move('white')
+
     def _handle_preferences_event(self, event, mx, my) -> None:
         app = self.app
         g = app.game
@@ -721,6 +859,82 @@ class InputHandler:
             app.launch_bot_move()
         elif g.state == GameState.PVP and not g.adapter.is_game_over:
             g.pending_pvp_flip = True
+
+    def _handle_engine_match_event(self, event, mx, my) -> None:
+        """GameState.ENGINE_MATCH's event handler — a deliberately reduced
+        sibling of _handle_game_event: the in-game menu button, history
+        panel review (click a ply, scrub with Left/Right, live button),
+        and right-click arrows all work exactly like PVP/BOT, but there
+        is no click-to-select, drag-and-drop, or promotion overlay at
+        all, since neither side is a human — every move arrives from
+        App._apply_engine_match_move, never from a board click.
+        """
+        app = self.app
+        g = app.game
+        assert g.adapter is not None  # guaranteed by g.state == ENGINE_MATCH
+
+        if event.type == pygame.KEYDOWN and event.key in (pygame.K_LEFT, pygame.K_RIGHT):
+            move_review(g, -1 if event.key == pygame.K_LEFT else 1)
+            return
+
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            if app.analysis_toggle_rect and app.analysis_toggle_rect.collidepoint(mx, my):
+                app._toggle_analysis()
+            elif app.em_pause_btn_rect and app.em_pause_btn_rect.collidepoint(mx, my):
+                g.em_paused = not g.em_paused
+            elif (app.em_step_btn_rect and g.em_paused
+                    and app.em_step_btn_rect.collidepoint(mx, my)):
+                # Step is a no-op while running (not paused) — guarded
+                # here to match the dimmed/non-interactive look
+                # App._render_game gives it in that state, so a click
+                # that lands on its rect while running does nothing
+                # rather than silently queuing a step for whenever the
+                # person pauses next.
+                g.em_step_requested = True
+            elif app.menu_btn_ingame_rect and app.menu_btn_ingame_rect.collidepoint(mx, my):
+                g.main_menu_overlay = True
+            elif mx >= theme.PANEL_X:
+                if (app._live_btn_rect and app._live_btn_rect.collidepoint(mx, my)
+                        and g.review.active):
+                    exit_review(g)
+                else:
+                    for rect, ply in app._history_ply_rects:
+                        if rect.collidepoint(mx, my):
+                            enter_review(g, ply)
+                            break
+            elif g.game_over and app.gameover_btn_rects:
+                rects = app.gameover_btn_rects
+                if rects['menu'].collidepoint(mx, my):
+                    g.review.reset()
+                    g.state = GameState.MENU
+                elif rects['rematch'].collidepoint(mx, my):
+                    self._start_engine_match_rematch()
+                elif rects['review'].collidepoint(mx, my):
+                    enter_review(g, len(g.adapter.san_history))
+            # No board-click branch at all: nothing to select or drag.
+
+        elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 3:
+            bx, by = mx - theme.BOARD_X, my - theme.BOARD_Y
+            if 0 <= bx < theme.BOARD_PX and 0 <= by < theme.BOARD_PX:
+                g.arrow_start_sq = layout.pixel_to_sq(bx, by, g.board_flipped)
+
+        elif event.type == pygame.MOUSEBUTTONUP and event.button == 3:
+            if g.arrow_start_sq is not None:
+                bx, by = mx - theme.BOARD_X, my - theme.BOARD_Y
+                if 0 <= bx < theme.BOARD_PX and 0 <= by < theme.BOARD_PX:
+                    end_sq = layout.pixel_to_sq(bx, by, g.board_flipped)
+                    if end_sq != g.arrow_start_sq:
+                        g.all_arrows.append((g.arrow_start_sq, end_sq))
+                g.arrow_start_sq = None
+
+    def _start_engine_match_rematch(self) -> None:
+        """Start a fresh match with the same two engine configurations as
+        the one that just ended, without going back through
+        ENGINE_SETUP — mirrors _start_rematch's PVP/BOT behaviour."""
+        app = self.app
+        g = app.game
+        app.start_game()
+        g.launch_engine_match_move('white')
 
     def _handle_game_event(self, event, mx, my) -> None:
         app = self.app

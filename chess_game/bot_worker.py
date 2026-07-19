@@ -35,8 +35,16 @@ class BotWorker:
     def thinking(self) -> bool:
         return self._thinking
 
-    def start(self, board: chess.Board, color: str, level: int) -> int:
+    def start(self, board: chess.Board, color: str, level: int,
+              min_think_time_s: float = 1.0) -> int:
         """Cancel any in-flight search, then start a new one.
+
+        min_think_time_s is forwarded to ChessBot.get_move (default 1.0s,
+        unchanged from before this parameter existed — BOT mode always
+        calls start() with the default, so human-vs-bot pacing is
+        unaffected). Game.launch_engine_match_move passes 0.0 instead,
+        since there's no human on either side of an engine-vs-engine
+        match for that pacing to matter to.
 
         Returns the epoch assigned to this search; pass it to take() later
         to retrieve the result only if it's still current.
@@ -54,7 +62,10 @@ class BotWorker:
 
         def _run() -> None:
             try:
-                move = self._bot.get_move(board_copy, color, level, abort=cancel_event)
+                move = self._bot.get_move(
+                    board_copy, color, level, abort=cancel_event,
+                    min_think_time_s=min_think_time_s,
+                )
             except SearchAborted:
                 logger.debug("Bot search aborted (epoch %d)", epoch)
                 with self._lock:

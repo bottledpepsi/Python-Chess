@@ -95,3 +95,33 @@ def test_worker_thinking_flag_clears_after_completion():
     worker.start(board, "white", level=1)
     worker.join(timeout=3.0)
     assert worker.thinking is False
+
+
+def test_start_default_preserves_one_second_floor():
+    """BotWorker.start's min_think_time_s must default to 1.0 — BOT mode
+    always calls start() without this argument, so its existing
+    human-vs-bot pacing must be completely unaffected by this
+    parameter's addition."""
+    bot = _slow_bot()
+    worker = BotWorker(bot)
+    board = chess.Board()
+    start = time.time()
+    worker.start(board, "white", level=1)
+    worker.join(timeout=3.0)
+    elapsed = time.time() - start
+    assert elapsed >= 0.95, f"expected the ~1.0s floor by default, took {elapsed:.2f}s"
+
+
+def test_start_min_think_time_s_zero_is_threaded_through_to_get_move():
+    """Game.launch_engine_match_move relies on this override actually
+    reaching ChessBot.get_move — confirms BotWorker.start's
+    min_think_time_s parameter isn't silently dropped anywhere in the
+    thread-launch plumbing."""
+    bot = _slow_bot()
+    worker = BotWorker(bot)
+    board = chess.Board()
+    start = time.time()
+    worker.start(board, "white", level=1, min_think_time_s=0.0)
+    worker.join(timeout=3.0)
+    elapsed = time.time() - start
+    assert elapsed < 0.9, f"expected no artificial floor when overridden, took {elapsed:.2f}s"

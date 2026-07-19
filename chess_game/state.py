@@ -20,12 +20,21 @@ class GameState(enum.Enum):
     TIME_CONTROL_PICK = "time_control_pick"
     PVP = "pvp"
     BOT = "bot"
+    # Engine-vs-engine setup screen: pick each side's engine (native depth
+    # or Stockfish ELO) before starting a headless-style match rendered on
+    # the normal board. Reached from OPPONENT_PICK's third card, mirroring
+    # how COLOR_PICK/DIFFICULTY lead into BOT.
+    ENGINE_SETUP = "engine_setup"
+    ENGINE_MATCH = "engine_match"
 
 
 # Allowed transitions: from_state -> set of to_states it may move to.
 _ALLOWED: dict[GameState, set[GameState]] = {
     GameState.MENU: {GameState.OPPONENT_PICK, GameState.PREFERENCES},
-    GameState.OPPONENT_PICK: {GameState.MENU, GameState.TIME_CONTROL_PICK, GameState.COLOR_PICK},
+    GameState.OPPONENT_PICK: {
+        GameState.MENU, GameState.TIME_CONTROL_PICK, GameState.COLOR_PICK,
+        GameState.ENGINE_SETUP,
+    },
     GameState.TIME_CONTROL_PICK: {GameState.OPPONENT_PICK, GameState.PVP},
     GameState.COLOR_PICK: {
         GameState.MENU, GameState.OPPONENT_PICK,
@@ -33,6 +42,7 @@ _ALLOWED: dict[GameState, set[GameState]] = {
     },
     GameState.DIFFICULTY: {GameState.COLOR_PICK, GameState.BOT},
     GameState.STOCKFISH_DIFFICULTY: {GameState.COLOR_PICK, GameState.BOT},
+    GameState.ENGINE_SETUP: {GameState.OPPONENT_PICK, GameState.ENGINE_MATCH},
     # PREFERENCES is also reachable mid-game (from the in-game menu overlay,
     # see App._handle_main_menu_overlay_event) and returns to whichever of
     # PVP/BOT it was opened from, tracked out-of-band on
@@ -41,6 +51,10 @@ _ALLOWED: dict[GameState, set[GameState]] = {
     GameState.PREFERENCES: {GameState.MENU, GameState.PVP, GameState.BOT},
     GameState.PVP: {GameState.MENU, GameState.PREFERENCES},
     GameState.BOT: {GameState.MENU, GameState.PREFERENCES},
+    # No PREFERENCES mid-match: an engine-vs-engine game has no in-game menu
+    # overlay (no save/resign/draw-offer semantics apply to it — see
+    # App._handle_engine_match_event), so its only way out is to the menu.
+    GameState.ENGINE_MATCH: {GameState.MENU},
 }
 
 
