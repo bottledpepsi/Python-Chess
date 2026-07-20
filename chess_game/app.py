@@ -162,17 +162,14 @@ class App:
         self.sf_diff_slider_dragging = False
         self.sf_diff_focus = FocusGroup([])
 
-        # Engine Match setup screen (GameState.ENGINE_SETUP). Mouse/drag
-        # only for this first cut — deliberately no FocusGroup here. Every
-        # other sub-screen's focus group is a flat list of independent
-        # widgets; this screen has two full native/stockfish+slider units
-        # side by side, and giving that a correct Tab order is its own
-        # design task rather than a mechanical copy of the single-slider
-        # screens' pattern. Keyboard users can still reach this screen and
-        # back out of it (Tab/Enter just won't drive its controls yet).
+        # Engine Match setup screen (GameState.ENGINE_SETUP). Its custom
+        # controls are rebuilt each frame, so their focus wrappers are too;
+        # this keeps the two-column setup usable without a mouse just like
+        # the other setup screens.
         self.em_setup_rects: dict = {}
         self.em_setup_slider_info: dict = {}
         self.em_setup_dragging_side: str | None = None  # None | "white" | "black"
+        self.em_setup_focus = FocusGroup([])
 
 
         self.pref_back_rect: pygame.Rect | None = None
@@ -930,6 +927,16 @@ class App:
                 self.screen, g.em_white_kind, g.em_white_level, g.em_white_elo,
                 g.em_black_kind, g.em_black_level, g.em_black_elo, self.fonts,
             )
+            setup_focusables = [FocusableRect(self.em_setup_rects['back'], ('back',))]
+            for side in ('white', 'black'):
+                setup_focusables += [
+                    FocusableRect(self.em_setup_rects[f'{side}_engine']['native'], ('engine', side, 'native')),
+                    FocusableRect(self.em_setup_rects[f'{side}_engine']['stockfish'], ('engine', side, 'stockfish')),
+                    FocusableRect(self.em_setup_rects[f'{side}_slider'], ('slider', side)),
+                ]
+            setup_focusables.append(FocusableRect(self.em_setup_rects['confirm'], ('confirm',)))
+            self.em_setup_focus.rebuild(setup_focusables)
+            self._draw_focus_ring(self.em_setup_focus)
         elif g.state == GameState.PREFERENCES:
             (self.pref_back_rect, self.pref_board_rects,
              self.pref_arrow_rects, self.pref_motion_rect,

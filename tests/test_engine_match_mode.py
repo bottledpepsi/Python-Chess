@@ -29,6 +29,10 @@ def _click(app, x, y, button=1):
     app._handle_event(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=button, pos=(x, y)), x, y)
 
 
+def _key(app, key, mod=0):
+    app._handle_event(pygame.event.Event(pygame.KEYDOWN, key=key, mod=mod), 0, 0)
+
+
 def _finish_animation(app):
     if app.game.anim is not None:
         app.game.anim.start_ms = -10_000
@@ -124,6 +128,41 @@ def test_engine_setup_confirm_starts_match(app):
     # after launch" a race rather than a reliable fact. em_white_epoch
     # being set is the synchronous, non-racy signal that a search was
     # actually launched.
+
+
+def test_engine_setup_is_fully_keyboard_navigable(app):
+    app.game.state = GameState.ENGINE_SETUP
+    app._render(16)
+
+    # Back, white Native, white Stockfish, white slider.
+    for _ in range(4):
+        _key(app, pygame.K_TAB)
+    assert app.em_setup_focus.widgets[app.em_setup_focus.index].key == ('slider', 'white')
+    original_level = app.game.em_white_level
+    _key(app, pygame.K_RIGHT)
+    assert app.game.em_white_level == original_level + 1
+
+    # Black Native, Black Stockfish: select Stockfish with Enter.
+    _key(app, pygame.K_TAB)
+    _key(app, pygame.K_TAB)
+    _key(app, pygame.K_RETURN)
+    assert app.game.em_black_kind == 'stockfish'
+
+    # Its slider changes in predictable 10-ELO steps.
+    _key(app, pygame.K_TAB)
+    original_elo = app.game.em_black_elo
+    _key(app, pygame.K_RIGHT)
+    assert app.game.em_black_elo == original_elo + 10
+
+
+def test_engine_setup_keyboard_confirm_starts_match(app):
+    app.game.state = GameState.ENGINE_SETUP
+    app._render(16)
+    for _ in range(8):
+        _key(app, pygame.K_TAB)
+    assert app.em_setup_focus.widgets[app.em_setup_focus.index].key == ('confirm',)
+    _key(app, pygame.K_RETURN)
+    assert app.game.state == GameState.ENGINE_MATCH
 
 
 # ── Auto-play ─────────────────────────────────────────────────────────────────

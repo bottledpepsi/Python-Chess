@@ -480,11 +480,13 @@ def draw_engine_match_setup(screen, em_white_kind, em_white_level, em_white_elo,
     screen.blit(title_s, title_s.get_rect(center=(cx, 56)))
     sub_s = fonts.pick_s.render('Configure both sides, then start the match', True, MENU_TEXT_SUB)
     screen.blit(sub_s, sub_s.get_rect(center=(cx, 84)))
+    help_s = fonts.count.render('Tab to navigate · Enter to select · Arrow keys adjust sliders', True, MENU_TEXT_SUB)
+    screen.blit(help_s, help_s.get_rect(center=(cx, 102)))
 
     col_w = 360
     col_gap = 40
     col_x = {'white': cx - col_gap // 2 - col_w, 'black': cx + col_gap // 2}
-    col_y = 116
+    col_y = 124
     sides = [
         ('white', em_white_kind, em_white_level, em_white_elo, (235, 235, 230), (40, 40, 44)),
         ('black', em_black_kind, em_black_level, em_black_elo, (225, 225, 225), (26, 26, 30)),

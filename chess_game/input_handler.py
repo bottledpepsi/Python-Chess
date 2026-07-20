@@ -215,6 +215,7 @@ class InputHandler:
             GameState.COLOR_PICK: app.picker_focus,
             GameState.DIFFICULTY: app.diff_focus,
             GameState.STOCKFISH_DIFFICULTY: app.sf_diff_focus,
+            GameState.ENGINE_SETUP: app.em_setup_focus,
             GameState.PREFERENCES: app.pref_focus,
         }.get(state)
 
@@ -258,6 +259,8 @@ class InputHandler:
             g.state = GameState.COLOR_PICK
             return True
         if g.state == GameState.ENGINE_SETUP:
+            app.em_setup_focus.clear()
+            app.em_setup_dragging_side = None
             g.state = GameState.OPPONENT_PICK
             return True
         if g.state == GameState.PREFERENCES:
@@ -678,11 +681,11 @@ class InputHandler:
             app.launch_bot_move()
 
     def _handle_engine_setup_event(self, event, mx, my) -> None:
-        """GameState.ENGINE_SETUP — configure both sides' engine kind and
-        level/ELO, then start the match. Mouse/drag only for this first
-        cut (see App.__init__'s em_setup_* fields for why there's no
-        FocusGroup / keyboard support here yet); Escape still works via
-        _handle_escape below regardless.
+        """Configure both sides' engine kind and level/ELO, then start.
+
+        The screen supports the same keyboard pattern as the rest of the
+        app: Tab reaches every control, Enter/Space selects a choice or
+        starts the match, and arrow keys adjust the focused slider.
 
         app.em_setup_dragging_side tracks which side's slider (if any) is
         currently being dragged, since — unlike every single-slider
@@ -695,8 +698,35 @@ class InputHandler:
         if not rects:
             return  # first frame after entering this state, nothing drawn yet
 
+        if event.type == pygame.KEYDOWN:
+            focused_key = None
+            if 0 <= app.em_setup_focus.index < len(app.em_setup_focus.widgets):
+                focused_key = app.em_setup_focus.widgets[app.em_setup_focus.index].key
+
+            if (isinstance(focused_key, tuple) and focused_key[0] == 'slider'
+                    and event.key in (pygame.K_LEFT, pygame.K_DOWN, pygame.K_RIGHT, pygame.K_UP)):
+                direction = -1 if event.key in (pygame.K_LEFT, pygame.K_DOWN) else 1
+                self._adjust_engine_setup_slider(focused_key[1], direction)
+                return
+
+            if event.key in (pygame.K_RETURN, pygame.K_SPACE) and focused_key:
+                action = focused_key[0]
+                if action == 'back':
+                    app.em_setup_focus.clear()
+                    g.state = GameState.OPPONENT_PICK
+                elif action == 'confirm':
+                    self._confirm_engine_match_setup()
+                elif action == 'engine':
+                    side, kind = focused_key[1], focused_key[2]
+                    if side == 'white':
+                        g.em_white_kind = kind
+                    else:
+                        g.em_black_kind = kind
+                return
+
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             if rects.get('back') and rects['back'].collidepoint(mx, my):
+                app.em_setup_focus.clear()
                 g.state = GameState.OPPONENT_PICK
                 return
             if rects.get('confirm') and rects['confirm'].collidepoint(mx, my):
@@ -721,6 +751,21 @@ class InputHandler:
         elif event.type == pygame.MOUSEMOTION:
             if app.em_setup_dragging_side is not None:
                 self._apply_engine_setup_slider_value(app.em_setup_dragging_side, mx)
+
+    def _adjust_engine_setup_slider(self, side: str, direction: int) -> None:
+        """Move one discrete step on an engine-setup slider from the keyboard."""
+        g = self.app.game
+        kind = g.em_white_kind if side == 'white' else g.em_black_kind
+        if kind == 'stockfish':
+            step = 10
+            if side == 'white':
+                g.em_white_elo = max(MIN_ELO, min(MAX_ELO, g.em_white_elo + direction * step))
+            else:
+                g.em_black_elo = max(MIN_ELO, min(MAX_ELO, g.em_black_elo + direction * step))
+        elif side == 'white':
+            g.em_white_level = max(1, min(10, g.em_white_level + direction))
+        else:
+            g.em_black_level = max(1, min(10, g.em_black_level + direction))
 
     def _apply_engine_setup_slider_value(self, side: str, mx: int) -> None:
         """Convert a slider click/drag x-coordinate into a level (native)
@@ -757,6 +802,7 @@ class InputHandler:
         color to orient around, unlike BOT mode's board_flipped."""
         app = self.app
         g = app.game
+        app.em_setup_focus.clear()
         g.board_flipped = False
         g.state = GameState.ENGINE_MATCH
         app.start_game()
