@@ -892,12 +892,14 @@ def draw_preferences(screen, current_board_theme, current_arrow_theme, reduced_m
 def draw_main_menu_overlay(screen, fonts, panel_x):
     """In-game 'Game menu' overlay.
 
-    Returns (save_btn, export_btn, preferences_btn, draw_btn, resign_btn,
-    quit_btn). Resign and Quit Without Saving are both destructive/
-    irreversible, so neither acts immediately — the caller (InputHandler)
-    routes both through a Yes/Cancel confirmation (see
-    render.overlays.draw_confirm_modal) instead of ending the game or
-    discarding the save on a single misclick.
+    Returns (save_btn, preferences_btn). Export PGN, Offer Draw, and
+    Resign live as small persistent buttons next to the in-game Menu/
+    Analysis row instead (see App._render_game) — Save & Quit is the only
+    action here that ends the game, so it's the only one that still
+    warrants a confirmation-free but deliberate, separate-screen click.
+    Quit Without Saving has been removed entirely: Save & Quit already
+    covers "I'm done playing", and a silent-discard path alongside it
+    was judged more likely to be mis-clicked than actually wanted.
     """
     ov = pygame.Surface((WIN_W, WIN_H), pygame.SRCALPHA)
     ov.fill((0, 0, 0, 200))
@@ -905,7 +907,7 @@ def draw_main_menu_overlay(screen, fonts, panel_x):
 
     cx = panel_x // 2
     cy = WIN_H // 2
-    bw, bh = 320, 430
+    bw, bh = 320, 220
     box = pygame.Rect(cx - bw // 2, cy - bh // 2, bw, bh)
     pygame.draw.rect(screen, (30, 30, 30), box, border_radius=14)
     pygame.draw.rect(screen, (66, 66, 66), box, 2, border_radius=14)
@@ -920,17 +922,9 @@ def draw_main_menu_overlay(screen, fonts, panel_x):
     y0 = box.y + 90
     save_btn = pygame.Rect(cx - bw2 // 2, y0, bw2, bh2)
     preferences_btn = pygame.Rect(cx - bw2 // 2, y0 + (bh2 + gap), bw2, bh2)
-    export_btn = pygame.Rect(cx - bw2 // 2, y0 + 2 * (bh2 + gap), bw2, bh2)
-    draw_btn = pygame.Rect(cx - bw2 // 2, y0 + 3 * (bh2 + gap), bw2, bh2)
-    resign_btn = pygame.Rect(cx - bw2 // 2, y0 + 4 * (bh2 + gap), bw2, bh2)
-    quit_btn = pygame.Rect(cx - bw2 // 2, y0 + 5 * (bh2 + gap), bw2, bh2)
     for btn, label, font, accent in (
         (save_btn, 'Save & Quit', fonts.ov_btn, (65, 115, 65)),
         (preferences_btn, 'Preferences', fonts.ov_btn_sm, (70, 70, 80)),
-        (export_btn, 'Export PGN', fonts.ov_btn_sm, (60, 80, 120)),
-        (draw_btn, 'Offer Draw', fonts.ov_btn_sm, (110, 100, 55)),
-        (resign_btn, 'Resign', fonts.ov_btn_sm, (140, 85, 45)),
-        (quit_btn, 'Quit Without Saving', fonts.ov_btn_sm, (130, 65, 55)),
     ):
         hov = btn.collidepoint(mx_, my_)
         bg = tuple(min(255, int(c * (0.48 if hov else 0.28))) for c in accent)
@@ -940,7 +934,7 @@ def draw_main_menu_overlay(screen, fonts, panel_x):
         l_s = font.render(label, True, MENU_TEXT)
         screen.blit(l_s, l_s.get_rect(center=btn.center))
 
-    return save_btn, export_btn, preferences_btn, draw_btn, resign_btn, quit_btn
+    return save_btn, preferences_btn
 
 
 def draw_engine_match_menu_overlay(screen, fonts, panel_x):
@@ -968,7 +962,7 @@ def draw_engine_match_menu_overlay(screen, fonts, panel_x):
 
     cx = panel_x // 2
     cy = WIN_H // 2
-    bw, bh = 320, 180
+    bw, bh = 320, 220
     box = pygame.Rect(cx - bw // 2, cy - bh // 2, bw, bh)
     pygame.draw.rect(screen, (30, 30, 30), box, border_radius=14)
     pygame.draw.rect(screen, (66, 66, 66), box, 2, border_radius=14)

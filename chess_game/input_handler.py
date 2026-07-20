@@ -304,6 +304,10 @@ class InputHandler:
                 g.pending_save_data = None
 
     def _handle_main_menu_overlay_event(self, event, mx, my) -> None:
+        """Save & Quit / Preferences only — Export PGN, Offer Draw, and
+        Resign now live as persistent buttons next to the in-game Menu/
+        Analysis row (see _handle_game_event), and Quit Without Saving has
+        been removed entirely (see draw_main_menu_overlay's docstring)."""
         app = self.app
         g = app.game
         if g.state == GameState.ENGINE_MATCH:
@@ -315,12 +319,6 @@ class InputHandler:
                 g.review.reset()
                 g.state = GameState.MENU
                 g.main_menu_overlay = False
-            elif app.overlay_export_btn and app.overlay_export_btn.collidepoint(mx, my):
-                # Export and stay in the overlay/game — unlike Save & Quit
-                # and Quit, exporting a PGN isn't a reason to leave the
-                # current game in progress.
-                app.export_pgn()
-                g.main_menu_overlay = False
             elif app.overlay_preferences_btn and app.overlay_preferences_btn.collidepoint(mx, my):
                 # Preferences' own Back button returns here (see
                 # Game.preferences_return_state), so the overlay itself
@@ -329,25 +327,8 @@ class InputHandler:
                 g.main_menu_overlay = False
                 app.pref_focus.clear()
                 g.state = GameState.PREFERENCES
-            elif app.overlay_draw_btn and app.overlay_draw_btn.collidepoint(mx, my):
-                g.confirm_dialog = {
-                    'action': 'draw',
-                    'message': 'End the game as a draw by agreement?',
-                }
-            elif app.overlay_resign_btn and app.overlay_resign_btn.collidepoint(mx, my):
-                if g.state == GameState.PVP and g.adapter is not None:
-                    resigning = g.adapter.turn.capitalize()
-                    msg = f'{resigning} resigns and loses the game. Continue?'
-                else:
-                    msg = 'Resign this game? The bot will be awarded the win.'
-                g.confirm_dialog = {'action': 'resign', 'message': msg}
-            elif app.overlay_quit_btn and app.overlay_quit_btn.collidepoint(mx, my):
-                g.confirm_dialog = {
-                    'action': 'quit_without_saving',
-                    'message': "Discard this game without saving? This can't be undone.",
-                }
             else:
-                bw_chk, bh_chk = 320, 430
+                bw_chk, bh_chk = 320, 180
                 box_r = pygame.Rect(
                     theme.PANEL_X // 2 - bw_chk // 2, theme.WIN_H // 2 - bh_chk // 2,
                     bw_chk, bh_chk,
@@ -403,10 +384,11 @@ class InputHandler:
                 app.launch_bot_move()
 
     def _handle_confirm_dialog_event(self, event, mx, my) -> None:
-        """Handle the Yes/Cancel confirmation raised for Resign, Offer
-        Draw, and Quit Without Saving. Cancelling (or clicking outside
-        both buttons) just clears the dialog and returns to the in-game
-        menu overlay underneath, without side effects."""
+        """Handle the Yes/Cancel confirmation raised for Resign and Offer
+        Draw (now triggered from the persistent in-game button row rather
+        than the Game Menu overlay — see _handle_game_event). Cancelling
+        (or clicking outside both buttons) just clears the dialog and
+        returns to the game underneath, without side effects."""
         app = self.app
         g = app.game
         if event.type != pygame.MOUSEBUTTONDOWN or event.button != 1:
@@ -435,11 +417,6 @@ class InputHandler:
             g.agree_draw()
             mode_str = 'bot' if g.state == GameState.BOT else 'pvp'
             save_io.delete_save(mode_str)
-        elif action == 'quit_without_saving':
-            mode_str = 'bot' if g.state == GameState.BOT else 'pvp'
-            save_io.delete_save(mode_str)
-            g.review.reset()
-            g.state = GameState.MENU
 
     def _handle_menu_event(self, event, mx, my) -> None:
         app = self.app
@@ -971,7 +948,21 @@ class InputHandler:
             # was swallowed by an overlay). The state is re-armed below only
             # if this press selects a piece.
             self._reset_drag()
-            if app.analysis_toggle_rect and app.analysis_toggle_rect.collidepoint(mx, my):
+            if app.resign_btn_ingame_rect and app.resign_btn_ingame_rect.collidepoint(mx, my):
+                if g.state == GameState.PVP:
+                    resigning = g.adapter.turn.capitalize()
+                    msg = f'{resigning} resigns and loses the game. Continue?'
+                else:
+                    msg = 'Resign this game? The bot will be awarded the win.'
+                g.confirm_dialog = {'action': 'resign', 'message': msg}
+            elif app.draw_btn_ingame_rect and app.draw_btn_ingame_rect.collidepoint(mx, my):
+                g.confirm_dialog = {
+                    'action': 'draw',
+                    'message': 'End the game as a draw by agreement?',
+                }
+            elif app.export_btn_ingame_rect and app.export_btn_ingame_rect.collidepoint(mx, my):
+                app.export_pgn()
+            elif app.analysis_toggle_rect and app.analysis_toggle_rect.collidepoint(mx, my):
                 app._toggle_analysis()
             elif app.menu_btn_ingame_rect and app.menu_btn_ingame_rect.collidepoint(mx, my):
                 g.main_menu_overlay = True

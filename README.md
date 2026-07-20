@@ -45,7 +45,8 @@ A desktop chess game built with Python and pygame, powered by the `python-chess`
 - Scrollable move history panel with click-to-review navigation
 - Arrow drawing on the board (right-click drag) with configurable colour themes
 - Pawn promotion overlay strip with hover tooltips, keyboard-selectable (`Q/R/B/N`)
-- In-game menu overlay: save & quit, open Preferences without leaving the game, export PGN, offer a draw, resign, or quit without saving — Resign/Offer Draw/Quit Without Saving all require a Yes/Cancel confirmation, since each is irreversible
+- In-game menu overlay: save & quit, or open Preferences without leaving the game
+- Persistent in-game buttons (PvP/Bot only, next to Analysis/Menu): Resign, Offer Draw, and Export PGN — Resign/Offer Draw require a Yes/Cancel confirmation, since both are irreversible
 - Hand-cursor hover feedback over every clickable button, card, and toggle
 - Game-over overlay with termination reason and result, plus one-click **Rematch** (same colour/difficulty/time control, no need to go back through the pickers) and **Review Game**
 
@@ -189,7 +190,7 @@ Python-Chess/
         ├── trays.py             # Captured-piece trays
         ├── history.py           # Move-history panel
         ├── overlays.py          # Promotion, winner fade, modals
-        ├── menus.py             # Main menu, opponent picker, color/time-control pick, difficulty, preferences, in-game overlay (Save / Preferences / Export PGN / Offer Draw / Resign / Quit)
+        ├── menus.py             # Main menu, opponent picker, color/time-control pick, difficulty, preferences, in-game overlay (Save & Quit / Preferences)
         └── arrows.py            # Right-click analysis arrows + best-move PV arrows
 ```
 

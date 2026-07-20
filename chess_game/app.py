@@ -188,11 +188,7 @@ class App:
         self.overlay_cont_btn: pygame.Rect | None = None
         self.overlay_new_btn: pygame.Rect | None = None
         self.overlay_save_btn: pygame.Rect | None = None
-        self.overlay_quit_btn: pygame.Rect | None = None
-        self.overlay_export_btn: pygame.Rect | None = None
         self.overlay_preferences_btn: pygame.Rect | None = None
-        self.overlay_draw_btn: pygame.Rect | None = None
-        self.overlay_resign_btn: pygame.Rect | None = None
         # Reduced 2-button variant of the overlay above, used only for
         # GameState.ENGINE_MATCH (see draw_engine_match_menu_overlay).
         self.em_overlay_export_btn: pygame.Rect | None = None
@@ -208,6 +204,18 @@ class App:
         # menu_btn_ingame_rect) and the one-time "Stockfish not found"
         # modal's OK button rect.
         self.analysis_toggle_rect: pygame.Rect | None = None
+        # Persistent top-right row buttons for Resign / Offer Draw / Export
+        # PGN — rebuilt every frame like menu_btn_ingame_rect and
+        # analysis_toggle_rect, but only in PVP/BOT (see _render_game):
+        # there's no human to resign as or offer a draw to in ENGINE_MATCH,
+        # and engine-vs-engine games have their own Export PGN button in
+        # the reduced match-menu overlay instead. Reset to None outside
+        # PVP/BOT so a stale rect from a previous game can't be clicked
+        # after switching modes (mirrors em_pause_btn_rect/em_step_btn_rect's
+        # own reset-when-not-applicable pattern).
+        self.resign_btn_ingame_rect: pygame.Rect | None = None
+        self.draw_btn_ingame_rect: pygame.Rect | None = None
+        self.export_btn_ingame_rect: pygame.Rect | None = None
         # Pause/Resume and Step controls — only drawn/clickable in
         # GameState.ENGINE_MATCH (see the docstring on the drawing code
         # in _render_game for why: neither has meaning in PVP/BOT, where
@@ -832,9 +840,7 @@ class App:
         elif g.main_menu_overlay and g.state == GameState.ENGINE_MATCH:
             rects += [self.em_overlay_export_btn, self.em_overlay_quit_btn]
         elif g.main_menu_overlay:
-            rects += [self.overlay_save_btn, self.overlay_export_btn,
-                      self.overlay_preferences_btn, self.overlay_draw_btn,
-                      self.overlay_resign_btn, self.overlay_quit_btn]
+            rects += [self.overlay_save_btn, self.overlay_preferences_btn]
         elif self.pending_analysis_missing_modal:
             rects.append(self.analysis_missing_ok_rect)
         elif self.pending_corrupt_error is None:
@@ -847,6 +853,9 @@ class App:
                     rects.append(self.em_pause_btn_rect)
                     if g.em_paused:
                         rects.append(self.em_step_btn_rect)
+                else:
+                    rects += [self.resign_btn_ingame_rect, self.draw_btn_ingame_rect,
+                              self.export_btn_ingame_rect]
                 if g.review.active:
                     rects.append(self._live_btn_rect)
                 rects += [rect for rect, _ply in self._history_ply_rects]
@@ -976,18 +985,21 @@ class App:
                 self.screen, theme.WIN_W, theme.WIN_H, self.fonts
             )
         if g.main_menu_overlay and g.state in (GameState.PVP, GameState.BOT):
-            (self.overlay_save_btn, self.overlay_export_btn,
-             self.overlay_preferences_btn, self.overlay_draw_btn,
-             self.overlay_resign_btn, self.overlay_quit_btn) = render_menus.draw_main_menu_overlay(
+            self.overlay_save_btn, self.overlay_preferences_btn = render_menus.draw_main_menu_overlay(
                 self.screen, self.fonts, theme.PANEL_X
             )
-            if g.confirm_dialog is not None:
-                self.confirm_yes_btn, self.confirm_cancel_btn = render_overlays.draw_confirm_modal(
-                    self.screen, theme.WIN_W, theme.WIN_H, g.confirm_dialog['message'], self.fonts,
-                )
         if g.main_menu_overlay and g.state == GameState.ENGINE_MATCH:
             self.em_overlay_export_btn, self.em_overlay_quit_btn = render_menus.draw_engine_match_menu_overlay(
                 self.screen, self.fonts, theme.PANEL_X
+            )
+        # Resign/Offer Draw now raise this directly from their persistent
+        # row buttons (see App._render_game / InputHandler._handle_game_event)
+        # without opening the Game Menu overlay first, so this can't stay
+        # nested under the `g.main_menu_overlay` branch above — it must be
+        # drawable on its own, on top of the live board.
+        if g.confirm_dialog is not None:
+            self.confirm_yes_btn, self.confirm_cancel_btn = render_overlays.draw_confirm_modal(
+                self.screen, theme.WIN_W, theme.WIN_H, g.confirm_dialog['message'], self.fonts,
             )
         if self.pending_corrupt_error is not None:
             render_overlays.draw_error_modal(
@@ -1186,6 +1198,59 @@ class App:
             else:
                 self.em_pause_btn_rect = None
                 self.em_step_btn_rect = None
+
+            # Resign / Offer Draw / Export PGN, only in PVP/BOT — placed
+            # immediately to the left of the analysis toggle, same 18px-tall
+            # row as Menu/A. There's no human to resign as or offer a draw
+            # to in ENGINE_MATCH, and engine-vs-engine games have their own
+            # Export PGN button in the reduced match-menu overlay instead
+            # (see draw_engine_match_menu_overlay), so none of these three
+            # are drawn for that mode. Reset to None outside PVP/BOT so a
+            # stale rect from a previous game can't be clicked after
+            # switching modes (mirrors em_pause_btn_rect/em_step_btn_rect's
+            # own reset-when-not-applicable pattern above).
+            if not is_engine_match:
+                export_w, draw_w, resign_w, btn_h = 76, 92, 62, 18
+                self.export_btn_ingame_rect = pygame.Rect(
+                    self.analysis_toggle_rect.x - export_w - 6, 2, export_w, btn_h
+                )
+                self.draw_btn_ingame_rect = pygame.Rect(
+                    self.export_btn_ingame_rect.x - draw_w - 6, 2, draw_w, btn_h
+                )
+                self.resign_btn_ingame_rect = pygame.Rect(
+                    self.draw_btn_ingame_rect.x - resign_w - 6, 2, resign_w, btn_h
+                )
+
+                export_hov = self.export_btn_ingame_rect.collidepoint(mx_, my_)
+                exp_bg = (52, 52, 52) if export_hov else (42, 42, 42)
+                exp_brd = (90, 90, 90) if export_hov else (62, 62, 62)
+                exp_fg = (210, 210, 210) if export_hov else (140, 140, 140)
+                pygame.draw.rect(self.screen, exp_bg, self.export_btn_ingame_rect, border_radius=6)
+                pygame.draw.rect(self.screen, exp_brd, self.export_btn_ingame_rect, 1, border_radius=6)
+                exp_s = self.fonts.igmenu.render('Export PGN', True, exp_fg)
+                self.screen.blit(exp_s, exp_s.get_rect(center=self.export_btn_ingame_rect.center))
+
+                draw_hov = self.draw_btn_ingame_rect.collidepoint(mx_, my_)
+                dr_accent = (110, 100, 55)
+                dr_bg = tuple(min(255, int(c * (0.48 if draw_hov else 0.28))) for c in dr_accent)
+                dr_brd = dr_accent if draw_hov else tuple(int(c * 0.58) for c in dr_accent)
+                pygame.draw.rect(self.screen, dr_bg, self.draw_btn_ingame_rect, border_radius=6)
+                pygame.draw.rect(self.screen, dr_brd, self.draw_btn_ingame_rect, 1, border_radius=6)
+                dr_s = self.fonts.igmenu.render('Offer Draw', True, (210, 210, 210) if draw_hov else (170, 170, 160))
+                self.screen.blit(dr_s, dr_s.get_rect(center=self.draw_btn_ingame_rect.center))
+
+                resign_hov = self.resign_btn_ingame_rect.collidepoint(mx_, my_)
+                rs_accent = (140, 85, 45)
+                rs_bg = tuple(min(255, int(c * (0.48 if resign_hov else 0.28))) for c in rs_accent)
+                rs_brd = rs_accent if resign_hov else tuple(int(c * 0.58) for c in rs_accent)
+                pygame.draw.rect(self.screen, rs_bg, self.resign_btn_ingame_rect, border_radius=6)
+                pygame.draw.rect(self.screen, rs_brd, self.resign_btn_ingame_rect, 1, border_radius=6)
+                rs_s = self.fonts.igmenu.render('Resign', True, (230, 210, 200) if resign_hov else (190, 160, 140))
+                self.screen.blit(rs_s, rs_s.get_rect(center=self.resign_btn_ingame_rect.center))
+            else:
+                self.export_btn_ingame_rect = None
+                self.draw_btn_ingame_rect = None
+                self.resign_btn_ingame_rect = None
 
             # Draw eval bar before the dragged piece so the dragged piece
             # renders on top of the eval bar.

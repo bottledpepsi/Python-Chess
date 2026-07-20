@@ -233,12 +233,12 @@ def draw_info_modal(screen, win_w, win_h, title_text, message, fonts):
 
 def draw_confirm_modal(screen, win_w, win_h, message, fonts, confirm_label='Yes'):
     """Draw a generic Yes/Cancel confirmation modal, layered on top of
-    whatever else is on screen (e.g. the in-game main-menu overlay).
+    whatever else is on screen (e.g. the live board, when raised from the
+    persistent Resign/Offer Draw buttons — see App._render_game).
 
-    Used for destructive/irreversible in-game actions - Resign, Offer
-    Draw, and Quit Without Saving - so a single misclick on the menu
-    below can't end or discard a game outright. Returns (yes_rect,
-    cancel_rect).
+    Used for destructive/irreversible in-game actions - Resign and Offer
+    Draw - so a single misclick on either button can't end a game
+    outright. Returns (yes_rect, cancel_rect).
     """
     ov = pygame.Surface((win_w, win_h), pygame.SRCALPHA)
     ov.fill((0, 0, 0, 120))

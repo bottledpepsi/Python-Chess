@@ -254,7 +254,12 @@ def test_move_animation_actually_paints_a_sliding_sprite(app):
     assert painted, "no pixels around the interpolated position differ from the blank background"
 
 
-# ── In-game main menu overlay (Save & Quit / Export PGN / Quit) ──────────────
+# ── Persistent in-game row: Resign / Offer Draw / Export PGN ────────────────
+#
+# These three used to live inside the "Game Menu" overlay. They're now
+# small buttons drawn directly in the top-right row next to Analysis/Menu
+# (see App._render_game), available without opening the overlay at all,
+# and only in PVP/BOT — see the ENGINE_MATCH gating tests further down.
 
 def test_export_pgn_button_writes_file_and_keeps_game_open(app, tmp_path, monkeypatch):
     from chess_game import io as save_io
@@ -274,11 +279,10 @@ def test_export_pgn_button_writes_file_and_keeps_game_open(app, tmp_path, monkey
     export_path = tmp_path / "exported.pgn"
     monkeypatch.setattr(save_io, "pgn_export_path", lambda: export_path)
 
-    app.game.main_menu_overlay = True
-    app._render(16)  # populates overlay_export_btn
+    app._render(16)  # populates export_btn_ingame_rect
 
-    assert app.overlay_export_btn is not None
-    cx, cy = app.overlay_export_btn.center
+    assert app.export_btn_ingame_rect is not None
+    cx, cy = app.export_btn_ingame_rect.center
     _click(app, cx, cy)
 
     assert export_path.exists()
@@ -289,8 +293,6 @@ def test_export_pgn_button_writes_file_and_keeps_game_open(app, tmp_path, monkey
     assert app.game.adapter is not None
 
 
-# ── In-game menu overlay: Resign / Offer Draw / Quit confirmation ────────────
-
 def test_resign_button_opens_confirmation_without_ending_game(app):
     """Clicking Resign must not end the game immediately — it should raise
     a confirmation dialog first, since resigning is irreversible."""
@@ -298,10 +300,9 @@ def test_resign_button_opens_confirmation_without_ending_game(app):
     app.game.player_color = 'white'
     app.start_game()
 
-    app.game.main_menu_overlay = True
     app._render(16)
-    assert app.overlay_resign_btn is not None
-    _click(app, *app.overlay_resign_btn.center)
+    assert app.resign_btn_ingame_rect is not None
+    _click(app, *app.resign_btn_ingame_rect.center)
 
     assert app.game.confirm_dialog is not None
     assert app.game.confirm_dialog['action'] == 'resign'
@@ -313,9 +314,8 @@ def test_resign_confirmed_in_bot_game_awards_win_to_bot(app):
     app.game.player_color = 'white'
     app.start_game()
 
-    app.game.main_menu_overlay = True
     app._render(16)
-    _click(app, *app.overlay_resign_btn.center)
+    _click(app, *app.resign_btn_ingame_rect.center)
     app._render(16)
     assert app.confirm_yes_btn is not None
     _click(app, *app.confirm_yes_btn.center)
@@ -331,9 +331,8 @@ def test_resign_confirmed_in_pvp_game_credits_the_side_to_move(app):
     app.start_game()
     assert app.game.adapter.turn == 'white'
 
-    app.game.main_menu_overlay = True
     app._render(16)
-    _click(app, *app.overlay_resign_btn.center)
+    _click(app, *app.resign_btn_ingame_rect.center)
     app._render(16)
     _click(app, *app.confirm_yes_btn.center)
 
@@ -345,10 +344,9 @@ def test_offer_draw_confirmed_ends_game_as_draw(app):
     app.game.player_color = 'white'
     app.start_game()
 
-    app.game.main_menu_overlay = True
     app._render(16)
-    assert app.overlay_draw_btn is not None
-    _click(app, *app.overlay_draw_btn.center)
+    assert app.draw_btn_ingame_rect is not None
+    _click(app, *app.draw_btn_ingame_rect.center)
     app._render(16)
     _click(app, *app.confirm_yes_btn.center)
 
@@ -356,65 +354,77 @@ def test_offer_draw_confirmed_ends_game_as_draw(app):
     assert app.game.winner_result == ("Draw", "by Agreement")
 
 
-def test_confirm_dialog_cancel_returns_to_menu_without_side_effects(app):
+def test_confirm_dialog_cancel_returns_to_game_without_side_effects(app):
     app.game.state = GameState.BOT
     app.game.player_color = 'white'
     app.start_game()
 
-    app.game.main_menu_overlay = True
     app._render(16)
-    _click(app, *app.overlay_resign_btn.center)
+    _click(app, *app.resign_btn_ingame_rect.center)
     app._render(16)
     assert app.confirm_cancel_btn is not None
     _click(app, *app.confirm_cancel_btn.center)
 
     assert app.game.confirm_dialog is None
     assert app.game.game_over is False
-    # Cancelling returns to the menu underneath, not the live board.
-    assert app.game.main_menu_overlay is True
+    # Cancelling returns to the live board — there's no overlay underneath
+    # anymore, since Resign/Offer Draw no longer open one.
+    assert app.game.main_menu_overlay is False
 
 
-def test_esc_cancels_confirm_dialog_before_closing_menu(app):
+def test_esc_cancels_confirm_dialog_then_opens_game_menu(app):
     app.game.state = GameState.BOT
     app.game.player_color = 'white'
     app.start_game()
 
-    app.game.main_menu_overlay = True
     app._render(16)
-    _click(app, *app.overlay_resign_btn.center)
+    _click(app, *app.resign_btn_ingame_rect.center)
     assert app.game.confirm_dialog is not None
 
     _key(app, pygame.K_ESCAPE)
     assert app.game.confirm_dialog is None
-    assert app.game.main_menu_overlay is True  # first Esc only dismisses the dialog
-
-    _key(app, pygame.K_ESCAPE)
+    # The confirm dialog wasn't raised from the overlay this time, so the
+    # first Esc simply dismisses it without opening anything underneath.
     assert app.game.main_menu_overlay is False
 
+    _key(app, pygame.K_ESCAPE)
+    assert app.game.main_menu_overlay is True  # next Esc opens the Game Menu as usual
 
-def test_quit_without_saving_requires_confirmation_before_discarding(app, isolated_save_dir):
-    from chess_game import io as save_io
 
-    app.game.state = GameState.BOT
-    app.game.player_color = 'white'
+def test_resign_draw_export_buttons_absent_in_engine_match(app):
+    """Resign/Offer Draw/Export PGN have no meaning in engine-vs-engine
+    play (no human to resign as or offer a draw to, and engine matches
+    have their own Export PGN in the reduced match-menu overlay), so none
+    of the three persistent-row rects should be populated in this mode."""
+    app.game.state = GameState.ENGINE_MATCH
     app.start_game()
-    app.write_save()
-    assert save_io.read_save('bot') is not None
+
+    app._render(16)
+
+    assert app.resign_btn_ingame_rect is None
+    assert app.draw_btn_ingame_rect is None
+    assert app.export_btn_ingame_rect is None
+    # Menu/Analysis remain, same as PVP/BOT.
+    assert app.menu_btn_ingame_rect is not None
+    assert app.analysis_toggle_rect is not None
+
+
+def test_game_menu_overlay_only_has_save_and_preferences(app):
+    """The Game Menu overlay itself should now expose exactly two actions.
+    Export PGN, Offer Draw, and Resign moved to the persistent row; Quit
+    Without Saving was removed entirely (see draw_main_menu_overlay)."""
+    app.game.state = GameState.PVP
+    app.start_game()
 
     app.game.main_menu_overlay = True
     app._render(16)
-    _click(app, *app.overlay_quit_btn.center)
 
-    # Still just a pending confirmation — nothing discarded yet.
-    assert app.game.confirm_dialog is not None
-    assert app.game.state == GameState.BOT
-    assert save_io.read_save('bot') is not None
-
-    app._render(16)
-    _click(app, *app.confirm_yes_btn.center)
-
-    assert app.game.state == GameState.MENU
-    assert save_io.read_save('bot') is None
+    assert app.overlay_save_btn is not None
+    assert app.overlay_preferences_btn is not None
+    assert not hasattr(app, 'overlay_export_btn')
+    assert not hasattr(app, 'overlay_draw_btn')
+    assert not hasattr(app, 'overlay_resign_btn')
+    assert not hasattr(app, 'overlay_quit_btn')
 
 
 # ── In-game menu overlay: Preferences shortcut ────────────────────────────────

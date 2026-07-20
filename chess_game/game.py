@@ -165,9 +165,10 @@ class Game:
 
     main_menu_overlay: bool = False
 
-    # Set while a Yes/Cancel confirmation is pending on top of the in-game
-    # menu overlay (Resign / Offer Draw / Quit Without Saving all route
-    # through this rather than acting immediately, since all three are
+    # Set while a Yes/Cancel confirmation is pending on top of the game
+    # (Resign and Offer Draw, raised from their persistent in-game buttons
+    # — see App._render_game / InputHandler._handle_game_event — both
+    # route through this rather than acting immediately, since both are
     # destructive/irreversible). {'action': str, 'message': str} or None.
     confirm_dialog: dict | None = None
 

@@ -10,12 +10,15 @@ see render/trays.py).
 
 The top tray is NOT free real estate at the top, though: App._render_game
 draws the in-game "Menu" button and the analysis-mode toggle ('A') in
-that same right-aligned corner, at y=2..20, spanning roughly
-panel_x-116..panel_x. A clock vertically centred in the full tray height
-sits right on top of those buttons. To avoid that, the top clock is
-pinned to the *bottom* of the top tray instead of centred, clearing the
-button row entirely; the bottom clock has no such conflict (nothing else
-occupies the bottom tray's right edge) and stays vertically centred.
+that same right-aligned corner, at y=2..20 — spanning roughly
+panel_x-116..panel_x, or panel_x-364..panel_x in PVP/BOT once the
+Resign/Offer Draw/Export PGN buttons are included (see _render_game;
+those three are absent in ENGINE_MATCH, which uses Pause/Step instead at
+a similar total width). A clock vertically centred in the full tray
+height sits right on top of those buttons. To avoid that, the top clock
+is pinned to the *bottom* of the top tray instead of centred, clearing
+the button row entirely; the bottom clock has no such conflict (nothing
+else occupies the bottom tray's right edge) and stays vertically centred.
 
 This keeps the clocks visually attached to the player they belong to
 without needing any new layout constants in theme.py: whichever side's
