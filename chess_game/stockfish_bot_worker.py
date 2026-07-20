@@ -43,6 +43,11 @@ class StockfishBotWorker:
         self.engine_available = True
         self.missing_reason: str = ""
         self._tried_open = False
+        # UCI startup can be noticeably slow on a first launch. Serialise it
+        # independently of searches so preloading from Preferences and a
+        # game-start request never attempt two handshakes at once.
+        self._engine_lock = threading.Lock()
+        self._preload_thread: threading.Thread | None = None
 
         self._thread: threading.Thread | None = None
         self._cancel = threading.Event()
@@ -65,38 +70,56 @@ class StockfishBotWorker:
         """Update the configured engine path for the next engine spawn."""
         self._engine_path = path or "stockfish"
 
+    def preload(self) -> None:
+        """Start the first UCI handshake in the background.
+
+        Called when the player explicitly selects Stockfish as their bot
+        engine. This gives the process time to initialise before a game is
+        started, without making the preferences screen or render loop wait.
+        """
+        with self._engine_lock:
+            if self._engine is not None or (self._tried_open and not self.engine_available):
+                return
+            if self._preload_thread is not None and self._preload_thread.is_alive():
+                return
+            self._preload_thread = threading.Thread(
+                target=self._ensure_engine, name="stockfish-preload", daemon=True
+            )
+            self._preload_thread.start()
+
     def _ensure_engine(self) -> bool:
         """Lazily open the UCI engine and return whether it is usable."""
-        if self._engine is not None:
+        with self._engine_lock:
+            if self._engine is not None:
+                return True
+            if self._tried_open and not self.engine_available:
+                return False
+            self._tried_open = True
+            logger = get_logger()
+            try:
+                self._engine = _popen_uci(self._engine_path)
+            except TimeoutError as exc:
+                self.engine_available = False
+                self.missing_reason = (
+                    f"Timed out waiting for a UCI response from '{self._engine_path}' "
+                    "(is this actually a chess engine?)"
+                )
+                logger.warning("Stockfish handshake timed out (%s): %s", self._engine_path, exc)
+                return False
+            except OSError as exc:
+                self.engine_available = False
+                self.missing_reason = str(exc) or f"Could not launch '{self._engine_path}'"
+                logger.warning("Stockfish unavailable (%s): %s", self._engine_path, exc)
+                return False
+            except chess.engine.EngineError as exc:
+                self.engine_available = False
+                self.missing_reason = str(exc) or f"'{self._engine_path}' did not initialise correctly"
+                logger.warning("Stockfish did not initialise (%s): %s", self._engine_path, exc)
+                return False
+            self.engine_available = True
+            self.missing_reason = ""
+            self._configured_elo = None  # force a fresh setoption on the new process
             return True
-        if self._tried_open and not self.engine_available:
-            return False
-        self._tried_open = True
-        logger = get_logger()
-        try:
-            self._engine = _popen_uci(self._engine_path)
-        except TimeoutError as exc:
-            self.engine_available = False
-            self.missing_reason = (
-                f"Timed out waiting for a UCI response from '{self._engine_path}' "
-                "(is this actually a chess engine?)"
-            )
-            logger.warning("Stockfish handshake timed out (%s): %s", self._engine_path, exc)
-            return False
-        except OSError as exc:
-            self.engine_available = False
-            self.missing_reason = str(exc) or f"Could not launch '{self._engine_path}'"
-            logger.warning("Stockfish unavailable (%s): %s", self._engine_path, exc)
-            return False
-        except chess.engine.EngineError as exc:
-            self.engine_available = False
-            self.missing_reason = str(exc) or f"'{self._engine_path}' did not initialise correctly"
-            logger.warning("Stockfish did not initialise (%s): %s", self._engine_path, exc)
-            return False
-        self.engine_available = True
-        self.missing_reason = ""
-        self._configured_elo = None  # force a fresh setoption on the new process
-        return True
 
     def _configure_strength(self, elo: int) -> None:
         """Send UCI_LimitStrength + UCI_Elo if they differ from what's
@@ -136,14 +159,12 @@ class StockfishBotWorker:
         board_copy = board.copy()  # never share the live board with the thread
         self._thinking = True
 
-        if not self._ensure_engine():
-            self._thinking = False
-            return epoch
-
-        engine = self._engine
-        assert engine is not None
-
         def _run() -> None:
+            if not self._ensure_engine():
+                self._thinking = False
+                return
+            engine = self._engine
+            assert engine is not None
             try:
                 self._configure_strength(elo)
                 limit = chess.engine.Limit(time=movetime_ms / 1000.0)
@@ -217,11 +238,12 @@ class StockfishBotWorker:
         if the engine was never successfully opened."""
         self.cancel()
         self.join(timeout=2.0)
-        if self._engine is not None:
-            try:
-                self._engine.quit()
-            except chess.engine.EngineError:
-                pass
-            self._engine = None
-        self._tried_open = False
-        self._configured_elo = None
+        with self._engine_lock:
+            if self._engine is not None:
+                try:
+                    self._engine.quit()
+                except chess.engine.EngineError:
+                    pass
+                self._engine = None
+            self._tried_open = False
+            self._configured_elo = None

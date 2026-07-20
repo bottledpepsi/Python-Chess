@@ -89,6 +89,53 @@ def test_engine_unavailable_does_not_retry_popen_every_start(monkeypatch):
     assert calls["n"] == 1
 
 
+def test_preload_opens_engine_before_the_first_search(monkeypatch):
+    fake_engine = _FakeEngine()
+    opened = threading.Event()
+
+    def _fake_popen_uci(command, **kwargs):
+        opened.set()
+        return fake_engine
+
+    monkeypatch.setattr(chess.engine.SimpleEngine, "popen_uci", staticmethod(_fake_popen_uci))
+    worker = StockfishBotWorker("/fake/stockfish")
+
+    worker.preload()
+
+    assert opened.wait(timeout=1.0)
+    deadline = time.monotonic() + 1.0
+    while worker._engine is None and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert worker._engine is fake_engine
+    assert worker.thinking is False
+
+
+def test_first_engine_handshake_does_not_block_start(monkeypatch):
+    """A slow cold UCI handshake must run on the worker thread, not UI thread."""
+    handshake_started = threading.Event()
+    release_handshake = threading.Event()
+    fake_engine = _FakeEngine()
+
+    def _slow_popen_uci(command, **kwargs):
+        handshake_started.set()
+        release_handshake.wait(timeout=2.0)
+        return fake_engine
+
+    monkeypatch.setattr(chess.engine.SimpleEngine, "popen_uci", staticmethod(_slow_popen_uci))
+    worker = StockfishBotWorker("/fake/stockfish")
+
+    started_at = time.monotonic()
+    epoch = worker.start(chess.Board(), "white", elo=1500)
+    elapsed = time.monotonic() - started_at
+
+    assert elapsed < 0.1
+    assert handshake_started.wait(timeout=1.0)
+    assert worker.thinking is True
+    release_handshake.set()
+    worker.join(timeout=2.0)
+    assert worker.take(epoch) == chess.Move.from_uci("e2e4")
+
+
 # ── Move retrieval / epoch guarding ─────────────────────────────────────────
 
 

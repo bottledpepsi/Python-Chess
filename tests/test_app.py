@@ -81,6 +81,19 @@ def test_menu_preferences_click_goes_to_preferences(app):
     assert app.game.state == GameState.PREFERENCES
 
 
+def test_selecting_stockfish_in_preferences_preloads_bot_engine(app, monkeypatch):
+    app.game.state = GameState.PREFERENCES
+    app._render(16)
+    calls = []
+    monkeypatch.setattr(app.game.stockfish_bot_worker, "preload", lambda: calls.append("preload"))
+
+    rect = app.pref_engine_rects["stockfish"]
+    _click(app, *rect.center)
+
+    assert app.game.bot_engine_pref == "stockfish"
+    assert calls == ["preload"]
+
+
 def test_time_control_pick_none_starts_untimed_pvp_game(app):
     _click(app, *app.menu_buttons[0].rect.center)
     assert app.game.state == GameState.TIME_CONTROL_PICK
@@ -888,17 +901,9 @@ def test_poll_stockfish_download_success_updates_engine_path(app, monkeypatch, i
     assert app.game.analysis_missing_modal_shown is False
 
 
-def test_poll_stockfish_download_success_does_not_update_bot_play_engine_path(app, monkeypatch):
-    """Documents a known gap: a successful download updates
-    analysis_worker's engine path but never calls set_engine_path on
-    game.stockfish_bot_worker (the engine actually used to play bot
-    moves when "Vs Bot" is set to Stockfish). A user who downloads
-    Stockfish and immediately plays against it in the same session will
-    still hit the old path on that worker.
-
-    Documents current behaviour deliberately, same as the QUIT-handler
-    test above — not an endorsement of leaving it unfixed.
-    """
+def test_poll_stockfish_download_updates_play_engine_paths(app, monkeypatch):
+    """A downloaded binary must be used by bot play and engine matches,
+    not only by the analysis worker."""
     monkeypatch.setattr(
         app.stockfish_downloader, "take_result",
         lambda: ("/fake/path/to/stockfish", None),
@@ -906,19 +911,18 @@ def test_poll_stockfish_download_success_does_not_update_bot_play_engine_path(ap
     monkeypatch.setattr(app.analysis_worker, "stop_engine", lambda: None)
     monkeypatch.setattr(app.analysis_worker, "set_engine_path", lambda p: None)
     calls = []
-    monkeypatch.setattr(
-        app.game.stockfish_bot_worker, "set_engine_path",
-        lambda p: calls.append(p),
+    workers = (
+        app.game.stockfish_bot_worker,
+        app.game.em_white_stockfish_worker,
+        app.game.em_black_stockfish_worker,
     )
+    for worker in workers:
+        monkeypatch.setattr(worker, "stop_engine", lambda: None)
+        monkeypatch.setattr(worker, "set_engine_path", lambda p, w=worker: calls.append((w, p)))
 
     app._poll_stockfish_download()
 
-    assert calls == [], (
-        "game.stockfish_bot_worker.set_engine_path() was called after a "
-        "download — if this now passes with a call made, update this "
-        "test to assert the (now fixed) propagation instead of its "
-        "absence."
-    )
+    assert calls == [(worker, "/fake/path/to/stockfish") for worker in workers]
 
 
 # ── _frame() main-loop body ────────────────────────────────────────────────

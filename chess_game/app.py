@@ -292,6 +292,18 @@ class App:
         # earlier failed popen_uci attempt.
         self.analysis_worker.stop_engine()
         self.analysis_worker.set_engine_path(path)
+        # The bot and engine-match workers have their own UCI subprocesses;
+        # point them at the freshly downloaded binary too. Preload only the
+        # active bot engine, so download completion itself remains responsive.
+        for worker in (
+            g.stockfish_bot_worker,
+            g.em_white_stockfish_worker,
+            g.em_black_stockfish_worker,
+        ):
+            worker.stop_engine()
+            worker.set_engine_path(path)
+        if g.bot_engine_pref == 'stockfish':
+            g.stockfish_bot_worker.preload()
         g.analysis_missing_modal_shown = False
         self._persist_window_prefs()
         if g.analysis_enabled:

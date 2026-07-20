@@ -833,6 +833,11 @@ class InputHandler:
         elif kind == 'engine':
             assert value is not None
             g.bot_engine_pref = value
+            if value == 'stockfish':
+                # The UCI handshake can take a moment on a cold launch. Start
+                # it now, while the player is still in Preferences, so the
+                # game itself never blocks on its first bot move.
+                g.stockfish_bot_worker.preload()
             changed = True
         if changed:
             save_io.write_preferences(g.board_theme, g.arrow_theme, g.reduced_motion,
