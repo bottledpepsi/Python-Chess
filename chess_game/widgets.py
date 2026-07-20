@@ -63,6 +63,73 @@ class Button:
                 and event.key in (pygame.K_RETURN, pygame.K_SPACE))
 
 
+class MenuCard(Button):
+    """Large, descriptive launcher card used on the home screen.
+
+    It deliberately keeps Button's click and keyboard contract so a home card
+    works with the existing FocusGroup without a parallel input path.
+    """
+
+    def __init__(self, rect, label: str, sublabel: str, icon: str,
+                 accent: tuple[int, int, int]):
+        super().__init__(rect, label, sublabel)
+        self.icon = icon
+        self.accent = accent
+
+    def draw(self, surface: pygame.Surface, fonts) -> None:
+        mx, my = pygame.mouse.get_pos()
+        hov = self.rect.collidepoint(mx, my)
+        bg = (48, 48, 54) if hov else (31, 31, 36)
+        border = self.accent if hov else (68, 68, 76)
+
+        pygame.draw.rect(surface, bg, self.rect, border_radius=14)
+        pygame.draw.rect(surface, border, self.rect, 2 if hov else 1,
+                         border_radius=14)
+        pygame.draw.rect(surface, self.accent,
+                         (self.rect.x, self.rect.y + 14, 4, self.rect.height - 28),
+                         border_radius=2)
+
+        badge_center = (self.rect.x + 48, self.rect.centery)
+        pygame.draw.circle(surface, (24, 24, 28), badge_center, 24)
+        pygame.draw.circle(surface, self.accent, badge_center, 24, 2)
+        self._draw_icon(surface, badge_center)
+
+        label = fonts.btn.render(self.label, True, MENU_TEXT)
+        surface.blit(label, (self.rect.x + 84, self.rect.y + 35))
+        sublabel = fonts.btn_sub.render(self.sublabel, True, MENU_TEXT_SUB)
+        surface.blit(sublabel, (self.rect.x + 84, self.rect.y + 66))
+
+        chevron = fonts.pick.render('\u203a', True, self.accent if hov else MENU_TEXT_SUB)
+        surface.blit(chevron, chevron.get_rect(midright=(self.rect.right - 18, self.rect.centery)))
+        if self.focused:
+            pygame.draw.rect(surface, FOCUS_RING, self.rect, 3, border_radius=14)
+
+    def _draw_icon(self, surface: pygame.Surface, center: tuple[int, int]) -> None:
+        """Draw compact, font-independent icons for the four home actions."""
+        x, y = center
+        if self.icon == 'friend':
+            for dx, dy in ((-7, -5), (7, -5)):
+                pygame.draw.circle(surface, self.accent, (x + dx, y + dy), 5, 2)
+                pygame.draw.arc(surface, self.accent, (x + dx - 7, y + dy + 4, 14, 12),
+                                190, 350, 2)
+        elif self.icon == 'computer':
+            pygame.draw.rect(surface, self.accent, (x - 12, y - 10, 24, 16), 2, border_radius=2)
+            pygame.draw.line(surface, self.accent, (x, y + 6), (x, y + 11), 2)
+            pygame.draw.line(surface, self.accent, (x - 7, y + 12), (x + 7, y + 12), 2)
+        elif self.icon == 'match':
+            pygame.draw.line(surface, self.accent, (x - 13, y - 7), (x + 13, y - 7), 2)
+            pygame.draw.line(surface, self.accent, (x + 13, y - 7), (x + 8, y - 12), 2)
+            pygame.draw.line(surface, self.accent, (x + 13, y - 7), (x + 8, y - 2), 2)
+            pygame.draw.line(surface, self.accent, (x + 13, y + 7), (x - 13, y + 7), 2)
+            pygame.draw.line(surface, self.accent, (x - 13, y + 7), (x - 8, y + 2), 2)
+            pygame.draw.line(surface, self.accent, (x - 13, y + 7), (x - 8, y + 12), 2)
+        elif self.icon == 'preferences':
+            pygame.draw.circle(surface, self.accent, center, 8, 2)
+            pygame.draw.circle(surface, self.accent, center, 2)
+            for dx, dy in ((0, -12), (12, 0), (0, 12), (-12, 0)):
+                pygame.draw.line(surface, self.accent, (x + dx // 2, y + dy // 2), (x + dx, y + dy), 3)
+
+
 class Slider:
     """A 1-D slider with discrete integer steps, focusable and arrow-key adjustable."""
 

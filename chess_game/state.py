@@ -6,7 +6,6 @@ import enum
 
 class GameState(enum.Enum):
     MENU = "menu"
-    OPPONENT_PICK = "opponent_pick"
     COLOR_PICK = "color_pick"
     DIFFICULTY = "difficulty"
     # Stockfish-specific ELO-slider sub-menu, reached instead of DIFFICULTY
@@ -14,35 +13,31 @@ class GameState(enum.Enum):
     # Game.bot_engine_pref / App._handle_color_pick_event).
     STOCKFISH_DIFFICULTY = "stockfish_difficulty"
     PREFERENCES = "preferences"
-    # Time-control preset picker, reached from OPPONENT_PICK when the user
-    # chooses to play a fresh PvP game (no existing save). Bot games never
-    # pass through this screen - time controls are PvP-only.
+    # Time-control preset picker, reached from the home screen when the user
+    # chooses a fresh PvP game. Bot games never pass through this screen.
     TIME_CONTROL_PICK = "time_control_pick"
     PVP = "pvp"
     BOT = "bot"
     # Engine-vs-engine setup screen: pick each side's engine (native depth
     # or Stockfish ELO) before starting a headless-style match rendered on
-    # the normal board. Reached from OPPONENT_PICK's third card, mirroring
-    # how COLOR_PICK/DIFFICULTY lead into BOT.
+    # the normal board. Reached directly from the home screen.
     ENGINE_SETUP = "engine_setup"
     ENGINE_MATCH = "engine_match"
 
 
 # Allowed transitions: from_state -> set of to_states it may move to.
 _ALLOWED: dict[GameState, set[GameState]] = {
-    GameState.MENU: {GameState.OPPONENT_PICK, GameState.PREFERENCES},
-    GameState.OPPONENT_PICK: {
-        GameState.MENU, GameState.TIME_CONTROL_PICK, GameState.COLOR_PICK,
-        GameState.ENGINE_SETUP,
+    GameState.MENU: {
+        GameState.TIME_CONTROL_PICK, GameState.COLOR_PICK,
+        GameState.ENGINE_SETUP, GameState.PREFERENCES,
     },
-    GameState.TIME_CONTROL_PICK: {GameState.OPPONENT_PICK, GameState.PVP},
+    GameState.TIME_CONTROL_PICK: {GameState.MENU, GameState.PVP},
     GameState.COLOR_PICK: {
-        GameState.MENU, GameState.OPPONENT_PICK,
-        GameState.DIFFICULTY, GameState.STOCKFISH_DIFFICULTY,
+        GameState.MENU, GameState.DIFFICULTY, GameState.STOCKFISH_DIFFICULTY,
     },
     GameState.DIFFICULTY: {GameState.COLOR_PICK, GameState.BOT},
     GameState.STOCKFISH_DIFFICULTY: {GameState.COLOR_PICK, GameState.BOT},
-    GameState.ENGINE_SETUP: {GameState.OPPONENT_PICK, GameState.ENGINE_MATCH},
+    GameState.ENGINE_SETUP: {GameState.MENU, GameState.ENGINE_MATCH},
     # PREFERENCES is also reachable mid-game (from the in-game menu overlay,
     # see App._handle_main_menu_overlay_event) and returns to whichever of
     # PVP/BOT it was opened from, tracked out-of-band on

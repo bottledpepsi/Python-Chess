@@ -1,4 +1,4 @@
-"""Main menu, color picker, difficulty slider, and preferences screens.
+"""Home launcher, setup menus, and preferences screens.
 
 Ported from main.py with module-level rect globals converted to return
 values, and self-contained Button widgets replaced with chess_game.widgets.
@@ -53,138 +53,50 @@ def _truncate_text_front(text, font, max_width):
 
 
 def make_menu_buttons():
-    from chess_game.widgets import Button
-    cx, bw, bh, gap = WIN_W // 2, 280, 68, 18
-    y0 = WIN_H // 2 + 30
+    from chess_game.widgets import MenuCard
+    cx, bw, bh, gap = WIN_W // 2, 350, 132, 18
+    x0 = cx - (bw * 2 + gap) // 2
+    y0 = 212
     return [
-        Button((cx - bw // 2, y0, bw, bh), 'Local Play', 'Play on this device'),
-        Button((cx - bw // 2, y0 + bh + gap, bw, bh), 'Online Play', 'Coming soon', disabled=True),
-        Button((cx - bw // 2, y0 + 2 * (bh + gap), bw, bh), 'Preferences', 'Board & Arrow themes'),
+        MenuCard((x0, y0, bw, bh), 'Play a Friend', 'Pass and play on one screen',
+                 'friend', (135, 196, 112)),
+        MenuCard((x0 + bw + gap, y0, bw, bh), 'Play the Computer',
+                 'Choose a colour and challenge the bot', 'computer', (190, 135, 212)),
+        MenuCard((x0, y0 + bh + gap, bw, bh), 'Engine Match',
+                 'Watch two engines play each other', 'match', (110, 175, 230)),
+        MenuCard((x0 + bw + gap, y0 + bh + gap, bw, bh), 'Preferences',
+                 'Themes, sound, accessibility and engine', 'preferences', (215, 180, 100)),
     ]
 
 
 def draw_menu(screen, menu_buttons, fonts):
     screen.fill(MENU_BG)
-    tile = 36
-    for col in range(WIN_W // tile + 1):
-        c = (32, 32, 32) if col % 2 == 0 else (26, 26, 26)
-        pygame.draw.rect(screen, c, (col * tile, 0, tile, tile * 2))
-    pygame.draw.line(screen, (40, 40, 40), (0, tile * 2), (WIN_W, tile * 2), 1)
+    tile = 42
+    for row in range(3):
+        for col in range(WIN_W // tile + 1):
+            c = (28, 31, 28) if (row + col) % 2 == 0 else (22, 25, 23)
+            pygame.draw.rect(screen, c, (col * tile, row * tile, tile, tile))
+    pygame.draw.line(screen, (48, 55, 48), (0, tile * 3), (WIN_W, tile * 3), 1)
     cx = WIN_W // 2
     title = fonts.title.render('Python Chess', True, MENU_ACCENT)
-    screen.blit(title, title.get_rect(center=(cx, WIN_H // 2 - 70)))
+    screen.blit(title, title.get_rect(center=(cx, 78)))
     tw = title.get_width()
     pygame.draw.line(screen, MENU_ACCENT,
-                      (cx - tw // 2, WIN_H // 2 - 40), (cx + tw // 2, WIN_H // 2 - 40), 2)
+                      (cx - tw // 2, 119), (cx + tw // 2, 119), 2)
+    subtitle = fonts.subtitle.render('Choose how you want to play', True, MENU_TEXT_SUB)
+    screen.blit(subtitle, subtitle.get_rect(center=(cx, 155)))
     for btn in menu_buttons:
         btn.draw(screen, fonts)
-    foot = fonts.subtitle.render('Built with Python & pygame', True, (55, 55, 55))
+    foot = fonts.subtitle.render('Tab to navigate  \u00b7  Enter to select  \u00b7  F11 for fullscreen',
+                                 True, (105, 105, 105))
     screen.blit(foot, foot.get_rect(center=(cx, WIN_H - 22)))
-
-
-def draw_opponent_picker(screen, fonts, king_imgs):
-    """The 'Select Opponent' screen shown after clicking Local Play.
-
-    Deliberately styled to look distinct from the color picker (which uses
-    two side-by-side square cards with king portraits). This screen uses a
-    vertical stack of wide horizontal cards, each with a circular icon
-    badge on the left, a bold title, and a descriptive subtitle —
-    closer in spirit to a settings/list screen than a chooser.
-
-    Returns (rects_by_key, back_rect) where rects_by_key is
-    {'player': rect, 'bot': rect, 'engine_match': rect}.
-    """
-    screen.fill(MENU_BG)
-    cx = WIN_W // 2
-
-    # Distinct header style: a small kicker label above a larger title,
-    # rather than the color picker's single centred heading.
-    kicker = fonts.pick_s.render('LOCAL PLAY', True, MENU_ACCENT)
-    screen.blit(kicker, kicker.get_rect(center=(cx, 90)))
-    title = fonts.pick.render('Choose your opponent', True, MENU_TEXT)
-    screen.blit(title, title.get_rect(center=(cx, 122)))
-
-    mx, my = pygame.mouse.get_pos()
-    # Wide horizontal cards stacked vertically — visually nothing like the
-    # color picker's two side-by-side squares.
-    card_w, card_h = 520, 100
-    card_x = cx - card_w // 2
-    gap = 18
-    total_h = card_h * 3 + gap * 2
-    y0 = WIN_H // 2 - total_h // 2 + 30
-
-    # Each card: (key, icon_img, icon_bg, title, subtitle, accent_color)
-    # Subtitles kept short to fit comfortably within the card width.
-    cards = [
-        ('player', king_imgs['white'], (60, 90, 60), 'Player',
-         'Two people, one screen. Pass the keyboard between moves.',
-         (120, 180, 100)),
-        ('bot', king_imgs['black'], (90, 60, 90), 'Bot',
-         'Challenge the computer. Pick a side and difficulty.',
-         (180, 120, 200)),
-        ('engine_match', king_imgs['black'], (60, 70, 95), 'Engine Match',
-         'Watch two engines play each other. Configure both sides.',
-         (110, 160, 220)),
-    ]
-
-    # Pre-scale the king portraits down to fit inside the circular badge.
-    badge_r = 34
-    badge_inner = 52
-    scaled_icons = {
-        'player': pygame.transform.smoothscale(king_imgs['white'], (badge_inner, badge_inner)),
-        'bot': pygame.transform.smoothscale(king_imgs['black'], (badge_inner, badge_inner)),
-        'engine_match': pygame.transform.smoothscale(king_imgs['black'], (badge_inner, badge_inner)),
-    }
-
-    rects = {}
-    for i, (key, _icon, icon_bg, label, sublabel, accent) in enumerate(cards):
-        rect = pygame.Rect(card_x, y0 + i * (card_h + gap), card_w, card_h)
-        hov = rect.collidepoint(mx, my)
-
-        # Card background: subtle two-tone fill on hover for a lift effect.
-        bg = (42, 42, 48) if hov else (30, 30, 34)
-        pygame.draw.rect(screen, bg, rect, border_radius=14)
-        # Border (accent on hover, neutral otherwise).
-        border_col = accent if hov else (62, 62, 68)
-        pygame.draw.rect(screen, border_col, rect, 2 if hov else 1, border_radius=14)
-
-        # Circular icon badge on the left, holding the (scaled) king portrait.
-        badge_cx = rect.x + 64
-        badge_cy = rect.centery
-        pygame.draw.circle(screen, icon_bg, (badge_cx, badge_cy), badge_r)
-        pygame.draw.circle(screen, accent, (badge_cx, badge_cy), badge_r, 2)
-        screen.blit(scaled_icons[key], scaled_icons[key].get_rect(center=(badge_cx, badge_cy)))
-
-        # Title + subtitle to the right of the badge, vertically centred
-        # within the (now shorter) card.
-        text_x = badge_cx + badge_r + 22
-        lbl = fonts.btn.render(label, True, MENU_TEXT)
-        screen.blit(lbl, (text_x, rect.centery - 24))
-        sub = fonts.btn_sub.render(sublabel, True, MENU_TEXT_SUB)
-        screen.blit(sub, (text_x, rect.centery + 6))
-
-        # Right-side chevron hint that the card is clickable.
-        chevron = '\u203a'  # ›
-        ch = fonts.pick.render(chevron, True, accent if hov else (90, 90, 90))
-        screen.blit(ch, ch.get_rect(midright=(rect.right - 22, rect.centery)))
-
-        rects[key] = rect
-
-    # Footer hint.
-    hint = fonts.pick_s.render('Press Esc to go back', True, (90, 90, 90))
-    screen.blit(hint, hint.get_rect(center=(cx, WIN_H - 28)))
-
-    back_s = fonts.pick_s.render('\u2190 Back', True, MENU_TEXT_SUB)
-    screen.blit(back_s, (18, 18))
-    return rects, pygame.Rect(0, 0, 80, 36)
 
 
 def draw_color_picker(screen, fonts, king_imgs):
     """Returns (rects_by_color, back_rect).
 
-    In the refactored flow this screen is reached from the OPPONENT_PICK
-    screen (after choosing Bot), so the Back button returns there rather
-    than to the main menu.
+    This screen is reached directly from the home launcher after choosing
+    Play the Computer, so Back returns to the home screen.
     """
     screen.fill(MENU_BG)
     cx = WIN_W // 2
@@ -635,9 +547,9 @@ _TIME_CONTROL_SUBLABELS = {
 
 
 def draw_time_control_picker(screen, selected, fonts):
-    """PvP time-control preset picker, shown between OPPONENT_PICK and a
-    fresh PvP game (see GameState.TIME_CONTROL_PICK). Bot games never
-    reach this screen — time controls are PvP-only.
+    """PvP time-control preset picker, shown after choosing Play a Friend.
+
+    Bot games never reach this screen — time controls are PvP-only.
 
     `selected` is one of TIME_CONTROL_CHOICES. Returns
     (back_rect, confirm_rect, choice_rects) where choice_rects is

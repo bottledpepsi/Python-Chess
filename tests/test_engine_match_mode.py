@@ -59,22 +59,20 @@ def _run_frames(app, max_moves=6, timeout_s=30.0):
         time.sleep(0.05)
 
 
-# ── Opponent pick routing ────────────────────────────────────────────────────
+# ── Home launcher routing ────────────────────────────────────────────────────
 
-def test_opponent_pick_engine_match_goes_to_engine_setup(app):
-    app.game.state = GameState.OPPONENT_PICK
-    app._render(16)
-    rect = app.opponent_rects['engine_match']
+def test_home_engine_match_goes_to_engine_setup(app):
+    rect = app.menu_buttons[2].rect
     _click(app, rect.centerx, rect.centery)
     assert app.game.state == GameState.ENGINE_SETUP
 
 
-def test_engine_setup_back_returns_to_opponent_pick(app):
+def test_engine_setup_back_returns_to_home(app):
     app.game.state = GameState.ENGINE_SETUP
     app._render(16)
     rect = app.em_setup_rects['back']
     _click(app, rect.centerx, rect.centery)
-    assert app.game.state == GameState.OPPONENT_PICK
+    assert app.game.state == GameState.MENU
 
 
 # ── Setup screen interaction ─────────────────────────────────────────────────
@@ -417,9 +415,7 @@ def test_step_button_click_sets_step_requested_only_while_paused(app):
 def test_pause_step_buttons_absent_outside_engine_match(app):
     """The pause/step controls must not appear (or be clickable) in
     PVP/BOT — they're only meaningful when both sides are engines."""
-    app.game.state = GameState.OPPONENT_PICK
-    app._render(16)
-    rect = app.opponent_rects['bot']
+    rect = app.menu_buttons[1].rect
     _click(app, rect.centerx, rect.centery)
     assert app.game.state == GameState.COLOR_PICK
     app._render(16)

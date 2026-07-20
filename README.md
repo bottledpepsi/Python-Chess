@@ -9,10 +9,9 @@ A desktop chess game built with Python and pygame, powered by the `python-chess`
 ## Features
 
 **Gameplay modes**
-- **Local Play**: choose your opponent — another player (hot-seat PvP) or the computer (Bot)
+- **Direct mode launcher**: start a friend game, computer game, engine match, or preferences directly from the home screen
 - **Player vs Player**: local two-player mode on the same screen with automatic board flipping between turns
 - **Player vs Bot**: face an AI opponent with 10 difficulty levels
-- **Online Play**: placeholder for future online multiplayer (coming soon)
 
 **AI difficulty**
 - 10-level slider ranging from *Novice* to *Grandmaster*, with tier labels and descriptions
@@ -164,7 +163,7 @@ Python-Chess/
 └── chess_game/                  # The game itself
     ├── app.py                   # main() loop + state machine entry + flip/fullscreen + PGN export wiring
     ├── input_handler.py         # InputHandler: full event-dispatch tree, per-screen handlers, drag tracking
-    ├── state.py                 # GameState (Enum) + transition table (incl. OPPONENT_PICK)
+    ├── state.py                 # GameState (Enum) + transition table
     ├── game.py                  # @dataclass Game, owns all in-game state + flip animation + clock
     ├── clock.py                 # PvP chess clock: time controls, switch/tick/flag-fall, save/restore
     ├── io.py                    # Atomic, versioned JSON saves + preferences + export_pgn()

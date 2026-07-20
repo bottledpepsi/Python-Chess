@@ -123,10 +123,6 @@ class App:
         self.input = InputHandler(self)
 
         # Transient per-screen UI rects (not part of Game; rebuilt every frame).
-        self.opponent_rects: dict = {}
-        self.opponent_back: pygame.Rect | None = None
-        self.opponent_focus = FocusGroup([])
-
         self.picker_rects: dict = {}
         self.picker_back: pygame.Rect | None = None
         self.picker_focus = FocusGroup([])
@@ -139,7 +135,7 @@ class App:
         self.diff_focus = FocusGroup([])
 
         # Time-control preset picker (GameState.TIME_CONTROL_PICK), reached
-        # from OPPONENT_PICK's 'player' card for a fresh PvP game. tc_choice
+        # from the home screen's Play a Friend card for a fresh PvP game. tc_choice
         # is initialised from the saved preference so re-opening the screen
         # remembers the last pick; it only ever changes via this screen.
         default_time_control = prefs.get('default_time_control') or 'none'
@@ -875,15 +871,6 @@ class App:
         g = self.game
         if g.state == GameState.MENU:
             render_menus.draw_menu(self.screen, self.menu_buttons, self.fonts)
-        elif g.state == GameState.OPPONENT_PICK:
-            self.opponent_rects, self.opponent_back = render_menus.draw_opponent_picker(
-                self.screen, self.fonts, self.assets.king_imgs
-            )
-            opponent_focusables = [FocusableRect(self.opponent_back, 'back')] + [
-                FocusableRect(rect, key) for key, rect in self.opponent_rects.items()
-            ]
-            self.opponent_focus.rebuild(opponent_focusables)
-            self._draw_focus_ring(self.opponent_focus)
         elif g.state == GameState.TIME_CONTROL_PICK:
             self.tc_back, self.tc_confirm_rect, self.tc_choice_rects = (
                 render_menus.draw_time_control_picker(self.screen, self.tc_choice, self.fonts)
@@ -972,7 +959,7 @@ class App:
         after _render_base with the real mouse position restored, so the
         popup's own buttons get hover highlighting."""
         g = self.game
-        if g.continue_new_overlay and g.state in (GameState.MENU, GameState.OPPONENT_PICK):
+        if g.continue_new_overlay and g.state == GameState.MENU:
             self.overlay_cont_btn, self.overlay_new_btn = render_overlays.draw_continue_new_overlay(
                 self.screen, theme.WIN_W, theme.WIN_H, self.fonts
             )

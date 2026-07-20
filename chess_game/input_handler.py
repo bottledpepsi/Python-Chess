@@ -185,8 +185,6 @@ class InputHandler:
 
         if g.state == GameState.MENU:
             self._handle_menu_event(event, mx, my)
-        elif g.state == GameState.OPPONENT_PICK:
-            self._handle_opponent_pick_event(event, mx, my)
         elif g.state == GameState.TIME_CONTROL_PICK:
             self._handle_time_control_pick_event(event, mx, my)
         elif g.state == GameState.COLOR_PICK:
@@ -210,7 +208,6 @@ class InputHandler:
         app = self.app
         return {
             GameState.MENU: app.menu_focus,
-            GameState.OPPONENT_PICK: app.opponent_focus,
             GameState.TIME_CONTROL_PICK: app.tc_focus,
             GameState.COLOR_PICK: app.picker_focus,
             GameState.DIFFICULTY: app.diff_focus,
@@ -238,17 +235,13 @@ class InputHandler:
         if g.main_menu_overlay:
             g.main_menu_overlay = False
             return True
-        if g.state == GameState.OPPONENT_PICK:
-            app.opponent_focus.clear()
-            g.state = GameState.MENU
-            return True
         if g.state == GameState.TIME_CONTROL_PICK:
             app.tc_focus.clear()
-            g.state = GameState.OPPONENT_PICK
+            g.state = GameState.MENU
             return True
         if g.state == GameState.COLOR_PICK:
             app.picker_focus.clear()
-            g.state = GameState.OPPONENT_PICK
+            g.state = GameState.MENU
             return True
         if g.state == GameState.DIFFICULTY:
             app.diff_focus.clear()
@@ -261,7 +254,7 @@ class InputHandler:
         if g.state == GameState.ENGINE_SETUP:
             app.em_setup_focus.clear()
             app.em_setup_dragging_side = None
-            g.state = GameState.OPPONENT_PICK
+            g.state = GameState.MENU
             return True
         if g.state == GameState.PREFERENCES:
             app.pref_focus.clear()
@@ -301,9 +294,10 @@ class InputHandler:
                 mode_str = 'bot' if g.pending_mode == GameState.BOT else 'pvp'
                 save_io.delete_save(mode_str)
                 if g.pending_mode == GameState.PVP:
-                    g.board_flipped = False
-                    g.state = GameState.PVP
-                    app.start_game()
+                    # A new friend game should use the normal launcher flow
+                    # and let the players choose a clock, rather than silently
+                    # inheriting an implicit untimed game from the old save.
+                    g.state = GameState.TIME_CONTROL_PICK
                 else:
                     g.state = GameState.COLOR_PICK
                 g.continue_new_overlay = False
@@ -450,46 +444,10 @@ class InputHandler:
     def _handle_menu_event(self, event, mx, my) -> None:
         app = self.app
         g = app.game
-        # Button 0: Local Play → opponent picker (player vs bot choice happens there)
+        # The home screen is a direct mode launcher. Each card enters only
+        # the setup that applies to that mode; saved games still get the
+        # same continue/new choice before a fresh setup is opened.
         if app.menu_buttons[0].clicked(event) or app.menu_buttons[0].activated_by_key(event):
-            g.state = GameState.OPPONENT_PICK
-        # Button 1: Online Play — disabled (Coming soon). Button.clicked /
-        # activated_by_key already return False for disabled buttons, so this
-        # branch is effectively unreachable, but kept for clarity.
-        elif app.menu_buttons[1].clicked(event) or app.menu_buttons[1].activated_by_key(event):
-            pass
-        # Button 2: Preferences
-        elif app.menu_buttons[2].clicked(event) or app.menu_buttons[2].activated_by_key(event):
-            g.state = GameState.PREFERENCES
-
-    def _handle_opponent_pick_event(self, event, mx, my) -> None:
-        """Handle the 'Select Opponent' screen (Player vs Bot).
-
-        Choosing 'player' goes straight to a PvP game (checking for an
-        existing PvP save first). Choosing 'bot' goes to the color picker
-        (which then leads to the difficulty screen).
-        """
-        app = self.app
-        g = app.game
-        activated_key = None
-        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-            if app.opponent_back and app.opponent_back.collidepoint(mx, my):
-                activated_key = 'back'
-            else:
-                for key, rect in app.opponent_rects.items():
-                    if rect.collidepoint(mx, my):
-                        activated_key = key
-                        break
-        else:
-            for focusable in app.opponent_focus.widgets:
-                if focusable.activated_by_key(event):
-                    activated_key = focusable.key
-                    break
-
-        if activated_key == 'back':
-            app.opponent_focus.clear()
-            g.state = GameState.MENU
-        elif activated_key == 'player':
             save = app.safe_read_save('pvp')
             if save:
                 g.pending_mode = GameState.PVP
@@ -497,7 +455,7 @@ class InputHandler:
                 g.continue_new_overlay = True
             elif app.pending_corrupt_error is None:
                 g.state = GameState.TIME_CONTROL_PICK
-        elif activated_key == 'bot':
+        elif app.menu_buttons[1].clicked(event) or app.menu_buttons[1].activated_by_key(event):
             save = app.safe_read_save('bot')
             if save:
                 g.pending_mode = GameState.BOT
@@ -505,18 +463,15 @@ class InputHandler:
                 g.continue_new_overlay = True
             elif app.pending_corrupt_error is None:
                 g.state = GameState.COLOR_PICK
-        elif activated_key == 'engine_match':
-            # No saved-match continuation: engine-vs-engine games are
-            # never persisted as resumable saves (see Game's em_* fields
-            # docstring), so this always goes straight to a fresh setup
-            # screen rather than checking for an existing save first.
-            app.opponent_focus.clear()
+        elif app.menu_buttons[2].clicked(event) or app.menu_buttons[2].activated_by_key(event):
             g.state = GameState.ENGINE_SETUP
+        elif app.menu_buttons[3].clicked(event) or app.menu_buttons[3].activated_by_key(event):
+            g.state = GameState.PREFERENCES
 
     def _handle_time_control_pick_event(self, event, mx, my) -> None:
         """Handle the PvP time-control preset screen. Bot games never
-        reach this handler - it's only wired up for GameState.TIME_CONTROL_PICK,
-        which is only entered from the 'player' branch of OPPONENT_PICK."""
+        reach this handler - it is only wired up for GameState.TIME_CONTROL_PICK,
+        which is entered from the Play a Friend home card."""
         app = self.app
         g = app.game
         activated_key: str | tuple[str, str] | None = None
@@ -538,7 +493,7 @@ class InputHandler:
 
         if activated_key == 'back':
             app.tc_focus.clear()
-            g.state = GameState.OPPONENT_PICK
+            g.state = GameState.MENU
         elif activated_key == 'confirm':
             self._confirm_time_control()
         elif isinstance(activated_key, tuple) and activated_key[0] == 'choice':
@@ -583,7 +538,7 @@ class InputHandler:
 
         if activated_key == 'back':
             app.picker_focus.clear()
-            g.state = GameState.OPPONENT_PICK
+            g.state = GameState.MENU
         elif activated_key in ('white', 'black'):
             g.player_color = activated_key
             g.board_flipped = (activated_key == 'black')
@@ -713,7 +668,7 @@ class InputHandler:
                 action = focused_key[0]
                 if action == 'back':
                     app.em_setup_focus.clear()
-                    g.state = GameState.OPPONENT_PICK
+                    g.state = GameState.MENU
                 elif action == 'confirm':
                     self._confirm_engine_match_setup()
                 elif action == 'engine':
@@ -727,7 +682,7 @@ class InputHandler:
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             if rects.get('back') and rects['back'].collidepoint(mx, my):
                 app.em_setup_focus.clear()
-                g.state = GameState.OPPONENT_PICK
+                g.state = GameState.MENU
                 return
             if rects.get('confirm') and rects['confirm'].collidepoint(mx, my):
                 self._confirm_engine_match_setup()
