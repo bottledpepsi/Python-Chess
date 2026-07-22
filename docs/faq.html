@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FAQ - Python Chess Docs</title>
+<meta name="description" content="Frequently asked questions about Python Chess.">
+<link rel="icon" id="favicon" type="image/png" href="assets/imgs/w_knight.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/style.css">
+<script>
+  (function () {
+    try {
+      var stored = localStorage.getItem('theme');
+      var theme = stored === 'light' || stored === 'dark'
+        ? stored
+        : (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+      document.documentElement.setAttribute('data-theme', theme);
+    } catch (e) {}
+  })();
+</script>
+</head>
+<body>
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<div class="topbar">
+  <a class="brand" href="index.html"><img class="knight-icon" src="assets/imgs/w_knight.png" alt=""> Python Chess</a>
+  <div class="topbar-right">
+    <button class="theme-toggle" id="theme-toggle-mobile" type="button" aria-label="Switch to light theme" title="Toggle colour theme">
+      <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>
+      <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
+    </button>
+    <button class="nav-toggle" aria-expanded="false" aria-label="Toggle navigation">Menu</button>
+  </div>
+</div>
+
+<div class="shell">
+  <aside class="sidebar">
+    <div class="brand-row">
+      <a class="brand" href="index.html">
+        <img class="knight-icon" src="assets/imgs/w_knight.png" alt="">
+        <span class="brand-name">Python Chess</span>
+      </a>
+      <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Switch to light theme" title="Toggle colour theme">
+        <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>
+        <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
+      </button>
+    </div>
+    <p class="tagline">Documentation</p>
+
+    <nav aria-label="Documentation">
+      <div class="nav-group">
+        <p class="nav-group-label">Start here</p>
+        <ul>
+          <li><a href="index.html"><span class="sq">a1</span>Overview</a></li>
+          <li><a href="installation.html"><span class="sq">a2</span>Installation</a></li>
+          <li><a href="how-to-play.html"><span class="sq">a3</span>How to play</a></li>
+        </ul>
+      </div>
+      <div class="nav-group">
+        <p class="nav-group-label">Using the app</p>
+        <ul>
+          <li><a href="features.html"><span class="sq">b1</span>Features</a></li>
+          <li><a href="settings.html"><span class="sq">b2</span>Settings &amp; customization</a></li>
+          <li><a href="saves-and-export.html"><span class="sq">b3</span>Saves &amp; exporting games</a></li>
+        </ul>
+      </div>
+      <div class="nav-group">
+        <p class="nav-group-label">Help</p>
+        <ul>
+          <li><a href="troubleshooting.html"><span class="sq">c1</span>Troubleshooting</a></li>
+          <li><a href="faq.html"><span class="sq">c2</span>FAQ</a></li>
+        </ul>
+      </div>
+    </nav>
+
+    <div class="sidebar-footer">
+      <a href="https://github.com/bottledpepsi/Python-Chess">↗ View on GitHub</a>
+      <a href="https://github.com/bottledpepsi/Python-Chess/releases">↗ Download latest release</a>
+    </div>
+  </aside>
+
+  <main id="main">
+    <div class="content">
+
+      <span class="eyebrow">c2 · Help</span>
+      <h1>Frequently asked questions</h1>
+
+      <h3>Is Python Chess free?</h3>
+      <p>Yep. It's free, open source, and licensed under GPL-3.0. No ads, no accounts, no in-app purchases.</p>
+
+      <h3>Do I need an internet connection to play?</h3>
+      <p>Nope, Python Chess runs entirely on your computer. The only time it reaches out to the internet is if you choose to download the optional Stockfish engine for a stronger opponent or for analysis.</p>
+
+      <h3>Can I play online against someone else?</h3>
+      <p>Not right now. Python Chess is built for two people on the same computer, or for playing against the built-in computer opponent.</p>
+
+      <h3>What's the difference between the built-in opponent and Stockfish?</h3>
+      <p>The built-in opponent works right away with a simple 10-level difficulty picker. Stockfish is a separate, optional engine you can add for a much wider and more precise range of strength (using a rating slider), and it's also what powers the live analysis feature. See <a href="features.html#stockfish">Features: Stockfish</a>.</p>
+
+      <h3>Will I lose my game if I close the app?</h3>
+      <p>No, games save automatically as you play and they'll be there waiting when you reopen the app. See <a href="saves-and-export.html">Saves &amp; exporting games</a>.</p>
+
+      <h3>Can I take back a move?</h3>
+      <p>Not during play, moves are final once made, same as a real game would be. You can always review a finished game move by move afterward though, and export it to PGN to study later.</p>
+
+      <h3>Does it work on my operating system?</h3>
+      <p>Yes. Python Chess has ready-to-run builds for Windows, macOS, and Linux. See <a href="installation.html">Installation</a>.</p>
+
+      <h3>I found a bug, or I have a suggestion. Where do I report it?</h3>
+      <p>Please open an issue on the <a href="https://github.com/bottledpepsi/Python-Chess/issues">project's GitHub page</a>.</p>
+
+      <div class="page-nav">
+        <a class="prev" href="troubleshooting.html">
+          <span class="dir">Back</span>
+          ← Troubleshooting
+        </a>
+        <span></span>
+      </div>
+
+    </div>
+    <div class="site-footer">
+      Python Chess is free software under the <a href="https://github.com/bottledpepsi/Python-Chess/blob/main/LICENSE">GPL-3.0 license</a>. ·
+      <a href="https://github.com/bottledpepsi/Python-Chess">Source on GitHub</a>
+    </div>
+  </main>
+</div>
+
+<script src="assets/theme.js"></script>
+</body>
+</html>

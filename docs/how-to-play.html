@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>How to play - Python Chess Docs</title>
+<meta name="description" content="Game modes, moving pieces, and every keyboard shortcut in Python Chess.">
+<link rel="icon" id="favicon" type="image/png" href="assets/imgs/w_knight.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/style.css">
+<script>
+  (function () {
+    try {
+      var stored = localStorage.getItem('theme');
+      var theme = stored === 'light' || stored === 'dark'
+        ? stored
+        : (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+      document.documentElement.setAttribute('data-theme', theme);
+    } catch (e) {}
+  })();
+</script>
+</head>
+<body>
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<div class="topbar">
+  <a class="brand" href="index.html"><img class="knight-icon" src="assets/imgs/w_knight.png" alt=""> Python Chess</a>
+  <div class="topbar-right">
+    <button class="theme-toggle" id="theme-toggle-mobile" type="button" aria-label="Switch to light theme" title="Toggle colour theme">
+      <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>
+      <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
+    </button>
+    <button class="nav-toggle" aria-expanded="false" aria-label="Toggle navigation">Menu</button>
+  </div>
+</div>
+
+<div class="shell">
+  <aside class="sidebar">
+    <div class="brand-row">
+      <a class="brand" href="index.html">
+        <img class="knight-icon" src="assets/imgs/w_knight.png" alt="">
+        <span class="brand-name">Python Chess</span>
+      </a>
+      <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Switch to light theme" title="Toggle colour theme">
+        <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>
+        <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
+      </button>
+    </div>
+    <p class="tagline">Documentation</p>
+
+    <nav aria-label="Documentation">
+      <div class="nav-group">
+        <p class="nav-group-label">Start here</p>
+        <ul>
+          <li><a href="index.html"><span class="sq">a1</span>Overview</a></li>
+          <li><a href="installation.html"><span class="sq">a2</span>Installation</a></li>
+          <li><a href="how-to-play.html"><span class="sq">a3</span>How to play</a></li>
+        </ul>
+      </div>
+      <div class="nav-group">
+        <p class="nav-group-label">Using the app</p>
+        <ul>
+          <li><a href="features.html"><span class="sq">b1</span>Features</a></li>
+          <li><a href="settings.html"><span class="sq">b2</span>Settings &amp; customization</a></li>
+          <li><a href="saves-and-export.html"><span class="sq">b3</span>Saves &amp; exporting games</a></li>
+        </ul>
+      </div>
+      <div class="nav-group">
+        <p class="nav-group-label">Help</p>
+        <ul>
+          <li><a href="troubleshooting.html"><span class="sq">c1</span>Troubleshooting</a></li>
+          <li><a href="faq.html"><span class="sq">c2</span>FAQ</a></li>
+        </ul>
+      </div>
+    </nav>
+
+    <div class="sidebar-footer">
+      <a href="https://github.com/bottledpepsi/Python-Chess">↗ View on GitHub</a>
+      <a href="https://github.com/bottledpepsi/Python-Chess/releases">↗ Download latest release</a>
+    </div>
+  </aside>
+
+  <main id="main">
+    <div class="content">
+
+      <span class="eyebrow">a3 · Start here</span>
+      <h1>How to play</h1>
+      <p class="lede">From opening the app to finishing your first game.</p>
+
+      <h2>Starting a game</h2>
+      <p>When you open Python Chess, the home screen gives you a few ways to jump in:</p>
+      <ul>
+        <li><strong>Play a friend.</strong> Two people take turns on the same computer. The board flips around automatically between turns so whoever's playing always sees it from their own side.</li>
+        <li><strong>Play the computer.</strong> You against the built-in computer opponent. Pick a difficulty before you start.</li>
+        <li><strong>Engine match.</strong> Sit back and watch the computer play itself. Good for testing things out, or just watching a game happen.</li>
+        <li><strong>Preferences.</strong> Change settings before you play. More on that in <a href="settings.html">Settings &amp; customization</a>.</li>
+      </ul>
+
+      <h2>Moving pieces</h2>
+      <p>You can move pieces two ways, whichever feels more natural to you:</p>
+      <ul>
+        <li><strong>Click to move.</strong> Click a piece to select it, then click the square you want to move it to.</li>
+        <li><strong>Drag and drop.</strong> Click and hold a piece, drag it over, and let go.</li>
+      </ul>
+      <p>Squares you can legally move to get marked with a dot. If a move would capture something, you'll see a ring around that square instead. The square a piece moved from and to stays highlighted, and if your king's in check, that square lights up too.</p>
+
+      <h3>Promoting a pawn</h3>
+      <p>When a pawn makes it to the far end of the board, a little strip pops up so you can pick what it turns into. Click the piece you want, or just press <code>Q</code>, <code>R</code>, <code>B</code>, or <code>N</code> on your keyboard for queen, rook, bishop, or knight.</p>
+
+      <h3>Drawing arrows</h3>
+      <p>Click and drag with the <strong>right</strong> mouse button to draw an arrow on the board. Handy for planning a move out loud, or showing the person you're playing what you're thinking. Left-click anywhere on the board and your arrows clear.</p>
+
+      <h2>During the game</h2>
+      <p>A few buttons stick around while you're playing:</p>
+      <ul>
+        <li><strong>Menu.</strong> Save and quit, or duck into Preferences without losing your spot.</li>
+        <li><strong>Analysis.</strong> Turns on live move evaluation, see <a href="features.html#analysis">Features: Analysis mode</a>.</li>
+        <li><strong>Resign</strong> and <strong>Offer Draw.</strong> Both show up in two-player and computer games. Neither can be undone, so you'll get asked to confirm first.</li>
+        <li><strong>Export PGN.</strong> Saves the current game to a file. Details in <a href="saves-and-export.html">Saves &amp; exporting games</a>.</li>
+      </ul>
+
+      <h2>Reviewing a finished game</h2>
+      <p>Once a game ends, you'll see the result along with two options. <strong>Rematch</strong> starts a fresh game with the same settings, and <strong>Review Game</strong> lets you step back through every move that was played. While reviewing, use the arrow keys or click any move in the history panel to jump straight there.</p>
+
+      <h2>Keyboard shortcuts</h2>
+      <table>
+        <thead>
+          <tr><th>Key</th><th>What it does</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>←</code></td><td>Step backward through move history</td></tr>
+          <tr><td><code>→</code></td><td>Step forward through move history</td></tr>
+          <tr><td><code>Q</code> / <code>R</code> / <code>B</code> / <code>N</code></td><td>Choose promotion piece (queen, rook, bishop, knight)</td></tr>
+          <tr><td><code>F11</code></td><td>Toggle fullscreen</td></tr>
+          <tr><td><code>Esc</code></td><td>Cancel or back out of a menu</td></tr>
+          <tr><td><code>Tab</code> / <code>Shift+Tab</code></td><td>Move keyboard focus between buttons and controls</td></tr>
+          <tr><td><code>Enter</code> / <code>Space</code></td><td>Activate whatever's currently focused</td></tr>
+        </tbody>
+      </table>
+      <p>Every part of the app works with just a keyboard too, see <a href="features.html#accessibility">Features: Accessibility</a>.</p>
+
+      <div class="page-nav">
+        <a class="prev" href="installation.html">
+          <span class="dir">Back</span>
+          ← Installation
+        </a>
+        <a class="next" href="features.html">
+          <span class="dir">Next</span>
+          Features →
+        </a>
+      </div>
+
+    </div>
+    <div class="site-footer">
+      Python Chess is free software under the <a href="https://github.com/bottledpepsi/Python-Chess/blob/main/LICENSE">GPL-3.0 license</a>. ·
+      <a href="https://github.com/bottledpepsi/Python-Chess">Source on GitHub</a>
+    </div>
+  </main>
+</div>
+
+<script src="assets/theme.js"></script>
+</body>
+</html>

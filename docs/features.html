@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Features - Python Chess Docs</title>
+<meta name="description" content="A full tour of Python Chess features: difficulty levels, analysis mode, the chess clock, and more.">
+<link rel="icon" id="favicon" type="image/png" href="assets/imgs/w_knight.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/style.css">
+<script>
+  (function () {
+    try {
+      var stored = localStorage.getItem('theme');
+      var theme = stored === 'light' || stored === 'dark'
+        ? stored
+        : (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+      document.documentElement.setAttribute('data-theme', theme);
+    } catch (e) {}
+  })();
+</script>
+</head>
+<body>
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<div class="topbar">
+  <a class="brand" href="index.html"><img class="knight-icon" src="assets/imgs/w_knight.png" alt=""> Python Chess</a>
+  <div class="topbar-right">
+    <button class="theme-toggle" id="theme-toggle-mobile" type="button" aria-label="Switch to light theme" title="Toggle colour theme">
+      <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>
+      <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
+    </button>
+    <button class="nav-toggle" aria-expanded="false" aria-label="Toggle navigation">Menu</button>
+  </div>
+</div>
+
+<div class="shell">
+  <aside class="sidebar">
+    <div class="brand-row">
+      <a class="brand" href="index.html">
+        <img class="knight-icon" src="assets/imgs/w_knight.png" alt="">
+        <span class="brand-name">Python Chess</span>
+      </a>
+      <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Switch to light theme" title="Toggle colour theme">
+        <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>
+        <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
+      </button>
+    </div>
+    <p class="tagline">Documentation</p>
+
+    <nav aria-label="Documentation">
+      <div class="nav-group">
+        <p class="nav-group-label">Start here</p>
+        <ul>
+          <li><a href="index.html"><span class="sq">a1</span>Overview</a></li>
+          <li><a href="installation.html"><span class="sq">a2</span>Installation</a></li>
+          <li><a href="how-to-play.html"><span class="sq">a3</span>How to play</a></li>
+        </ul>
+      </div>
+      <div class="nav-group">
+        <p class="nav-group-label">Using the app</p>
+        <ul>
+          <li><a href="features.html"><span class="sq">b1</span>Features</a></li>
+          <li><a href="settings.html"><span class="sq">b2</span>Settings &amp; customization</a></li>
+          <li><a href="saves-and-export.html"><span class="sq">b3</span>Saves &amp; exporting games</a></li>
+        </ul>
+      </div>
+      <div class="nav-group">
+        <p class="nav-group-label">Help</p>
+        <ul>
+          <li><a href="troubleshooting.html"><span class="sq">c1</span>Troubleshooting</a></li>
+          <li><a href="faq.html"><span class="sq">c2</span>FAQ</a></li>
+        </ul>
+      </div>
+    </nav>
+
+    <div class="sidebar-footer">
+      <a href="https://github.com/bottledpepsi/Python-Chess">↗ View on GitHub</a>
+      <a href="https://github.com/bottledpepsi/Python-Chess/releases">↗ Download latest release</a>
+    </div>
+  </aside>
+
+  <main id="main">
+    <div class="content">
+
+      <span class="eyebrow">b1 · Using the app</span>
+      <h1>Features</h1>
+      <p class="lede">A tour of everything Python Chess can do.</p>
+
+      <h2>Game modes</h2>
+      <div class="feat">
+        <div class="feat-head"><span class="sq">01</span><h3>Player vs Player</h3></div>
+        <p>Two people play on the same screen, taking turns. The board rotates smoothly between moves, so whoever's up always sees the board from their own side of the table.</p>
+      </div>
+      <div class="feat">
+        <div class="feat-head"><span class="sq">02</span><h3>Player vs Computer</h3></div>
+        <p>Play against the built-in computer opponent. A 10-level difficulty slider runs from relaxed and forgiving all the way up to genuinely tough, with a short description at every level so you roughly know what you're picking.</p>
+      </div>
+
+      <h2 id="stockfish">Stockfish, an optional stronger opponent</h2>
+      <p>Want an opponent that scales well past the built-in one? Switch over to <a href="https://stockfishchess.org/">Stockfish</a>, one of the strongest chess engines out there. Instead of the 10-level slider, Stockfish uses a rating slider (1320 to 3190) so you can dial in a pretty specific level of challenge.</p>
+      <p>You don't need to install anything separately for this. The app can download and set up the right version of Stockfish for your computer automatically, right from the preferences screen.</p>
+
+      <h2 id="analysis">Analysis mode</h2>
+      <p>Turn on analysis with the in-game button to see how strong the current position actually is, either while you're playing or while reviewing a finished game. It's powered by Stockfish, so you'll need that set up first.</p>
+      <ul>
+        <li>An <strong>evaluation bar</strong> shows which side is doing better, and roughly by how much, animating smoothly instead of jumping around.</li>
+        <li><strong>Best-move arrows</strong> point out the strongest move found in the current position.</li>
+      </ul>
+      <p>If Stockfish isn't set up yet, analysis just won't be available, and you'll get a one-time message explaining why instead of things quietly failing.</p>
+
+      <h2>Chess clock</h2>
+      <p>Add a time limit to a two-player game. Before things start, pick from a few common time controls:</p>
+      <table>
+        <thead><tr><th>Preset</th><th>What it means</th></tr></thead>
+        <tbody>
+          <tr><td>None</td><td>No clock, play at your own pace</td></tr>
+          <tr><td>1+0</td><td>1 minute per player, no bonus time</td></tr>
+          <tr><td>3+2</td><td>3 minutes per player, plus 2 seconds added after each move</td></tr>
+          <tr><td>5+0</td><td>5 minutes per player, no bonus time</td></tr>
+          <tr><td>10+0</td><td>10 minutes per player, no bonus time</td></tr>
+          <tr><td>15+10</td><td>15 minutes per player, plus 10 seconds added after each move</td></tr>
+        </tbody>
+      </table>
+      <p>Both clocks sit above the board and switch automatically after each move. Running low turns your clock a warning color, and hitting zero means you lose on time. Clocks only apply to two-player games, computer games never get timed.</p>
+      <p>If you close the app mid-game with the clock running, your remaining time gets saved exactly as it was. Time spent away from the app never counts against either player.</p>
+
+      <h2>Board and interface</h2>
+      <ul>
+        <li><strong>Move it your way.</strong> Click to select and move, or just drag and drop.</li>
+        <li><strong>Smooth animation.</strong> Pieces glide into place, and the board itself animates whenever it flips between turns.</li>
+        <li><strong>Clear move indicators.</strong> Dots for open squares, rings for captures, plus highlights for the last move, the selected square, and check.</li>
+        <li><strong>Captured piece trays</strong> show what's been taken and who's ahead on material.</li>
+        <li><strong>Move history panel.</strong> Scroll through it, or click any move to jump straight to that point.</li>
+        <li><strong>Arrow drawing.</strong> Right-click and drag on the board to sketch out an idea.</li>
+        <li>Hover over anything clickable and you'll get a hand cursor, so it's always obvious what you can interact with.</li>
+      </ul>
+
+      <h2>Review mode</h2>
+      <p>Step through any game move by move, forward or backward, using the arrow keys or by clicking a move in the history panel. Each step animates smoothly, so it's easy to keep track of where you are.</p>
+
+      <h2>Sound</h2>
+      <p>Sound effects play for moves, captures, check, checkmate, and draws. You can mute everything from Preferences whenever you want.</p>
+
+      <h2>Saving your progress</h2>
+      <p>Games save themselves automatically as you play, so closing the app and picking up right where you left off is never an issue. More on this in <a href="saves-and-export.html">Saves &amp; exporting games</a>.</p>
+
+      <h2>Exporting games</h2>
+      <p>Export the game you're playing to a standard <code>.pgn</code> file whenever you like, so you can share it or open it in other chess software. See <a href="saves-and-export.html#export">Saves &amp; exporting games: exporting to PGN</a>.</p>
+
+      <h2 id="accessibility">Accessibility</h2>
+      <ul>
+        <li><strong>Full keyboard control.</strong> Every menu and button can be reached and used without a mouse.</li>
+        <li><strong>High-contrast text</strong> throughout the interface, meeting WCAG-AA guidelines.</li>
+        <li><strong>Fullscreen toggle</strong> with <code>F11</code>.</li>
+        <li><strong>Reduced motion</strong> option, for anyone who'd rather skip piece animation, board flipping, and fade effects.</li>
+        <li>A <strong>colorblind-friendly board theme</strong> is available too, see <a href="settings.html">Settings &amp; customization</a>.</li>
+      </ul>
+
+      <div class="page-nav">
+        <a class="prev" href="how-to-play.html">
+          <span class="dir">Back</span>
+          ← How to play
+        </a>
+        <a class="next" href="settings.html">
+          <span class="dir">Next</span>
+          Settings &amp; customization →
+        </a>
+      </div>
+
+    </div>
+    <div class="site-footer">
+      Python Chess is free software under the <a href="https://github.com/bottledpepsi/Python-Chess/blob/main/LICENSE">GPL-3.0 license</a>. ·
+      <a href="https://github.com/bottledpepsi/Python-Chess">Source on GitHub</a>
+    </div>
+  </main>
+</div>
+
+<script src="assets/theme.js"></script>
+</body>
+</html>

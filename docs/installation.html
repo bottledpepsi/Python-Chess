@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Installation - Python Chess Docs</title>
+<meta name="description" content="How to install Python Chess: download a ready-to-run build, or install from source.">
+<link rel="icon" id="favicon" type="image/png" href="assets/imgs/w_knight.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/style.css">
+<script>
+  (function () {
+    try {
+      var stored = localStorage.getItem('theme');
+      var theme = stored === 'light' || stored === 'dark'
+        ? stored
+        : (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+      document.documentElement.setAttribute('data-theme', theme);
+    } catch (e) {}
+  })();
+</script>
+</head>
+<body>
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<div class="topbar">
+  <a class="brand" href="index.html"><img class="knight-icon" src="assets/imgs/w_knight.png" alt=""> Python Chess</a>
+  <div class="topbar-right">
+    <button class="theme-toggle" id="theme-toggle-mobile" type="button" aria-label="Switch to light theme" title="Toggle colour theme">
+      <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>
+      <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
+    </button>
+    <button class="nav-toggle" aria-expanded="false" aria-label="Toggle navigation">Menu</button>
+  </div>
+</div>
+
+<div class="shell">
+  <aside class="sidebar">
+    <div class="brand-row">
+      <a class="brand" href="index.html">
+        <img class="knight-icon" src="assets/imgs/w_knight.png" alt="">
+        <span class="brand-name">Python Chess</span>
+      </a>
+      <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Switch to light theme" title="Toggle colour theme">
+        <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>
+        <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
+      </button>
+    </div>
+    <p class="tagline">Documentation</p>
+
+    <nav aria-label="Documentation">
+      <div class="nav-group">
+        <p class="nav-group-label">Start here</p>
+        <ul>
+          <li><a href="index.html"><span class="sq">a1</span>Overview</a></li>
+          <li><a href="installation.html"><span class="sq">a2</span>Installation</a></li>
+          <li><a href="how-to-play.html"><span class="sq">a3</span>How to play</a></li>
+        </ul>
+      </div>
+      <div class="nav-group">
+        <p class="nav-group-label">Using the app</p>
+        <ul>
+          <li><a href="features.html"><span class="sq">b1</span>Features</a></li>
+          <li><a href="settings.html"><span class="sq">b2</span>Settings &amp; customization</a></li>
+          <li><a href="saves-and-export.html"><span class="sq">b3</span>Saves &amp; exporting games</a></li>
+        </ul>
+      </div>
+      <div class="nav-group">
+        <p class="nav-group-label">Help</p>
+        <ul>
+          <li><a href="troubleshooting.html"><span class="sq">c1</span>Troubleshooting</a></li>
+          <li><a href="faq.html"><span class="sq">c2</span>FAQ</a></li>
+        </ul>
+      </div>
+    </nav>
+
+    <div class="sidebar-footer">
+      <a href="https://github.com/bottledpepsi/Python-Chess">↗ View on GitHub</a>
+      <a href="https://github.com/bottledpepsi/Python-Chess/releases">↗ Download latest release</a>
+    </div>
+  </aside>
+
+  <main id="main">
+    <div class="content">
+
+      <span class="eyebrow">a2 · Start here</span>
+      <h1>Installation</h1>
+      <p class="lede">Two ways to get Python Chess running: grab a build for your system, or install it from source if you've already got Python.</p>
+
+      <h2>Option A: download a ready-to-run build</h2>
+      <p>This is the easiest path for most people. You don't need Python installed at all.</p>
+      <div class="btn-row">
+        <a class="btn btn-primary" href="https://github.com/bottledpepsi/Python-Chess/releases">Go to the Releases page →</a>
+      </div>
+      <p>Grab the file for your operating system from the latest release, then:</p>
+      <ul>
+        <li><strong>Windows.</strong> Unzip the download and double-click <code>PythonChess.exe</code>.</li>
+        <li><strong>macOS.</strong> Unzip the download and open <strong>PythonChess.app</strong>. macOS will throw up a security warning the first time, see <a href="troubleshooting.html#macos">Troubleshooting: opening the app on macOS</a> for the quick, one-time fix.</li>
+        <li><strong>Linux.</strong> Extract the archive and run <code>./PythonChess</code> from a terminal.</li>
+      </ul>
+
+      <div class="callout tip">
+        <span class="callout-label">Tip</span>
+        <p>Every release ships builds for Windows, macOS, and Linux, so you shouldn't need to build anything yourself.</p>
+      </div>
+
+      <h2>Option B: install from source</h2>
+      <p>Want to run it straight from the Python source instead? Maybe you're following along with updates on GitHub, or you want to poke around and change something. Either way, you'll need <a href="https://www.python.org/downloads/">Python 3.10 or newer</a> first.</p>
+      <pre><code>git clone https://github.com/bottledpepsi/Python-Chess.git
+cd Python-Chess
+
+pip install -r requirements.txt
+
+python main.py</code></pre>
+      <p>That's really all there is to it. The game window should pop up right away.</p>
+
+      <h2>Optional: a stronger computer opponent</h2>
+      <p>Python Chess comes with its own built-in computer opponent, ready to go with no extra setup. If you want something noticeably stronger, and adjustable, you can add the free <a href="https://stockfishchess.org/">Stockfish</a> chess engine instead. The app can download and set it up for you automatically right from the preferences screen, so there's nothing to configure by hand. Check out <a href="features.html#stockfish">Features: Stockfish engine</a> for more on this.</p>
+
+      <h2>Building your own executable</h2>
+      <p>Most people can skip this section entirely. It's really only useful if you've changed the source code and want to package it up yourself. Python Chess uses <a href="https://pyinstaller.org/">PyInstaller</a> for this.</p>
+      <pre><code>pip install pyinstaller</code></pre>
+      <p><strong>Linux:</strong></p>
+      <pre><code>pyinstaller --onefile --add-data "data:data" --name "PythonChess" main.py</code></pre>
+      <p><strong>macOS:</strong></p>
+      <pre><code>PyInstaller --onedir --windowed --icon=icon.ico --add-data "data:data" --name "PythonChess" main.py</code></pre>
+      <p><strong>Windows:</strong></p>
+      <pre><code>PyInstaller --onefile --windowed --icon=icon.ico --add-data "data;data" --name "PythonChess" main.py</code></pre>
+
+      <div class="page-nav">
+        <a class="prev" href="index.html">
+          <span class="dir">Back</span>
+          ← Overview
+        </a>
+        <a class="next" href="how-to-play.html">
+          <span class="dir">Next</span>
+          How to play →
+        </a>
+      </div>
+
+    </div>
+    <div class="site-footer">
+      Python Chess is free software under the <a href="https://github.com/bottledpepsi/Python-Chess/blob/main/LICENSE">GPL-3.0 license</a>. ·
+      <a href="https://github.com/bottledpepsi/Python-Chess">Source on GitHub</a>
+    </div>
+  </main>
+</div>
+
+<script src="assets/theme.js"></script>
+</body>
+</html>

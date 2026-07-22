@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Troubleshooting - Python Chess Docs</title>
+<meta name="description" content="Fixes for common Python Chess problems: macOS security warnings, missing engine, log files.">
+<link rel="icon" id="favicon" type="image/png" href="assets/imgs/w_knight.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/style.css">
+<script>
+  (function () {
+    try {
+      var stored = localStorage.getItem('theme');
+      var theme = stored === 'light' || stored === 'dark'
+        ? stored
+        : (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+      document.documentElement.setAttribute('data-theme', theme);
+    } catch (e) {}
+  })();
+</script>
+</head>
+<body>
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<div class="topbar">
+  <a class="brand" href="index.html"><img class="knight-icon" src="assets/imgs/w_knight.png" alt=""> Python Chess</a>
+  <div class="topbar-right">
+    <button class="theme-toggle" id="theme-toggle-mobile" type="button" aria-label="Switch to light theme" title="Toggle colour theme">
+      <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>
+      <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
+    </button>
+    <button class="nav-toggle" aria-expanded="false" aria-label="Toggle navigation">Menu</button>
+  </div>
+</div>
+
+<div class="shell">
+  <aside class="sidebar">
+    <div class="brand-row">
+      <a class="brand" href="index.html">
+        <img class="knight-icon" src="assets/imgs/w_knight.png" alt="">
+        <span class="brand-name">Python Chess</span>
+      </a>
+      <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Switch to light theme" title="Toggle colour theme">
+        <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>
+        <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
+      </button>
+    </div>
+    <p class="tagline">Documentation</p>
+
+    <nav aria-label="Documentation">
+      <div class="nav-group">
+        <p class="nav-group-label">Start here</p>
+        <ul>
+          <li><a href="index.html"><span class="sq">a1</span>Overview</a></li>
+          <li><a href="installation.html"><span class="sq">a2</span>Installation</a></li>
+          <li><a href="how-to-play.html"><span class="sq">a3</span>How to play</a></li>
+        </ul>
+      </div>
+      <div class="nav-group">
+        <p class="nav-group-label">Using the app</p>
+        <ul>
+          <li><a href="features.html"><span class="sq">b1</span>Features</a></li>
+          <li><a href="settings.html"><span class="sq">b2</span>Settings &amp; customization</a></li>
+          <li><a href="saves-and-export.html"><span class="sq">b3</span>Saves &amp; exporting games</a></li>
+        </ul>
+      </div>
+      <div class="nav-group">
+        <p class="nav-group-label">Help</p>
+        <ul>
+          <li><a href="troubleshooting.html"><span class="sq">c1</span>Troubleshooting</a></li>
+          <li><a href="faq.html"><span class="sq">c2</span>FAQ</a></li>
+        </ul>
+      </div>
+    </nav>
+
+    <div class="sidebar-footer">
+      <a href="https://github.com/bottledpepsi/Python-Chess">↗ View on GitHub</a>
+      <a href="https://github.com/bottledpepsi/Python-Chess/releases">↗ Download latest release</a>
+    </div>
+  </aside>
+
+  <main id="main">
+    <div class="content">
+
+      <span class="eyebrow">c1 · Help</span>
+      <h1>Troubleshooting</h1>
+      <p class="lede">Fixes for the most common hiccups.</p>
+
+      <h2 id="macos">Opening the app on macOS</h2>
+      <p>The first time you open Python Chess on macOS, you'll probably see a warning saying the app "cannot be opened because it is from an unidentified developer." That's just because the app isn't signed with an Apple developer certificate, it doesn't mean anything's actually wrong. Here's how to get past it, two ways:</p>
+
+      <h3>Option A: System Settings</h3>
+      <ol>
+        <li>Double-click <strong>PythonChess.app</strong>. Click <strong>OK</strong> to dismiss the warning.</li>
+        <li>Open <strong>System Settings → Privacy &amp; Security</strong> and scroll down to the Security section. You'll see a message saying the app was blocked, click <strong>Open Anyway</strong>.</li>
+        <li>One last confirmation pops up. Click <strong>Open</strong>, and the app launches. macOS remembers this choice after that, so you only need to do it once.</li>
+      </ol>
+
+      <h3>Option B: Terminal</h3>
+      <p>Open Terminal and run:</p>
+      <pre><code>xattr -cr PythonChess.app</code></pre>
+      <p>Then double-click the app like normal. This just strips the quarantine flag macOS slaps on anything downloaded from the internet.</p>
+
+      <h2>Analysis or Stockfish isn't available</h2>
+      <p>Live analysis and the Stockfish opponent both need the Stockfish engine set up first. If you haven't done that yet, the app will show a one-time message explaining it rather than just failing quietly. Open Preferences and use the built-in downloader to grab the right version for your computer automatically, no manual installation needed.</p>
+
+      <h2 id="locations">Finding your files</h2>
+      <p>Python Chess keeps your saved games, exported PGN files, and a diagnostic log in a per-user folder on your computer. You shouldn't normally need to go digging around in here, but it's useful if something's gone wrong or you want to back up your games.</p>
+
+      <h3>Exported PGN files</h3>
+      <table>
+        <thead><tr><th>System</th><th>Location</th></tr></thead>
+        <tbody>
+          <tr><td>Linux</td><td><code>~/.local/share/python-chess/pgn/</code></td></tr>
+          <tr><td>macOS</td><td><code>~/Library/Application Support/python-chess/pgn/</code></td></tr>
+          <tr><td>Windows</td><td><code>%APPDATA%\python-chess\pgn\</code></td></tr>
+        </tbody>
+      </table>
+      <p>Each export gets a timestamp in its name (something like <code>python-chess_20260722_143000.pgn</code>), so exporting the same game twice keeps both copies instead of overwriting one.</p>
+
+      <h3>Diagnostic log</h3>
+      <p>If something's acting up, especially if the app closes unexpectedly, this is the first place to check:</p>
+      <table>
+        <thead><tr><th>System</th><th>Location</th></tr></thead>
+        <tbody>
+          <tr><td>Linux</td><td><code>~/.local/state/python-chess/log/python-chess.log</code></td></tr>
+          <tr><td>macOS</td><td><code>~/Library/Logs/python-chess/python-chess.log</code></td></tr>
+          <tr><td>Windows</td><td><code>%LOCALAPPDATA%\python-chess\Logs\python-chess.log</code></td></tr>
+        </tbody>
+      </table>
+
+      <div class="callout warn">
+        <span class="callout-label">Reporting a problem</span>
+        <p>Run into a bug? Please <a href="https://github.com/bottledpepsi/Python-Chess/issues">open an issue on GitHub</a>. Pasting in anything relevant from the log file above helps a lot.</p>
+      </div>
+
+      <div class="page-nav">
+        <a class="prev" href="saves-and-export.html">
+          <span class="dir">Back</span>
+          ← Saves &amp; exporting games
+        </a>
+        <a class="next" href="faq.html">
+          <span class="dir">Next</span>
+          FAQ →
+        </a>
+      </div>
+
+    </div>
+    <div class="site-footer">
+      Python Chess is free software under the <a href="https://github.com/bottledpepsi/Python-Chess/blob/main/LICENSE">GPL-3.0 license</a>. ·
+      <a href="https://github.com/bottledpepsi/Python-Chess">Source on GitHub</a>
+    </div>
+  </main>
+</div>
+
+<script src="assets/theme.js"></script>
+</body>
+</html>
