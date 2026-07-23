@@ -7,35 +7,42 @@
 
 :root,
 [data-theme="dark"] {
-  --bg: #0d1117;
-  --bg-secondary: #161b22;
-  --bg-card: #161b22;
-  --bg-card-hover: #1f2937;
-  --text: #f0f6fc;
-  --text-muted: #8b949e;
-  --accent: #58a6ff;
-  --accent-soft: rgba(88, 166, 255, 0.15);
+  /* Softer, slightly warmer dark palette - less saturated than a pure
+     GitHub-style near-black, easier on the eyes for long reading sessions. */
+  --bg: #14181f;
+  --bg-secondary: #1b212b;
+  --bg-card: #1b212b;
+  --bg-card-hover: #232a35;
+  --text: #e6e9ef;
+  --text-muted: #99a1ae;
+  --accent: #7aa8e0;
+  --accent-soft: rgba(122, 168, 224, 0.14);
   /* accent is tuned for text/links on a dark page background (7.5:1).
      Filled surfaces (buttons) need a darker shade so white text on top
      still clears 4.5:1 - accent itself only manages 2.5:1 there. */
-  --accent-emphasis: #1f6feb;
-  --border: #30363d;
-  --border-hover: #484f58;
+  --accent-emphasis: #3d6fb4;
+  --border: #2a313d;
+  --border-hover: #3d4552;
   /* Resting-state border for standalone controls like the theme toggle.
      border-hover only manages 2.3:1 against the page background, which
      falls short of the 3:1 WCAG wants for a UI component's visible edge
      at rest, so this is a slightly lighter grey in the same family. */
-  --control-border: #656c74;
-  --rook: #f85149;
-  --rook-soft: rgba(248, 81, 73, 0.12);
-  --gold: #e3b341;
-  --glow: rgba(88, 166, 255, 0.4);
+  --control-border: #5b6472;
+  --rook: #e08585;
+  --rook-soft: rgba(224, 133, 133, 0.12);
+  --gold: #d9b877;
+  --glow: rgba(122, 168, 224, 0.35);
 
-  --sidebar-bg: #010409;
-  --sidebar-text: #c9d1d9;
-  --sidebar-text-muted: #7d8590;
+  --sidebar-bg: #10141a;
+  --sidebar-text: #c7cdd6;
+  --sidebar-text-muted: #7c8492;
   --sidebar-active-bg: var(--accent);
-  --sidebar-active-text: #0d1117;
+  --sidebar-active-text: #14181f;
+
+  --footer-bg: #1b212b;
+  --footer-text: #a6adb8;
+  --footer-heading: #dfe3e9;
+  --footer-border: #2a313d;
 
   --theme-duration: 0.4s;
   --theme-easing: cubic-bezier(0.4, 0, 0.2, 1);
@@ -43,31 +50,38 @@
 }
 
 [data-theme="light"] {
-  --bg: #ffffff;
-  --bg-secondary: #f6f8fa;
+  /* Softer light palette - warm off-white instead of stark white, muted
+     ink instead of near-black, gentler blue accent. */
+  --bg: #faf9f7;
+  --bg-secondary: #f1efec;
   --bg-card: #ffffff;
-  --bg-card-hover: #f6f8fa;
-  --text: #1f2328;
-  --text-muted: #656d76;
-  --accent: #0969da;
-  --accent-soft: rgba(9, 105, 218, 0.1);
-  /* Light theme's accent already clears 4.5:1 with white text (5.19:1),
+  --bg-card-hover: #f5f3f0;
+  --text: #33302c;
+  --text-muted: #6f6a64;
+  --accent: #4574a8;
+  --accent-soft: rgba(69, 116, 168, 0.09);
+  /* Light theme's accent already clears 4.5:1 with white text,
      so accent-emphasis just matches accent here - kept as a separate
      token anyway so both themes can be styled through the same variable. */
-  --accent-emphasis: #0969da;
-  --border: #d0d7de;
-  --border-hover: #afb8c1;
-  --control-border: #8c95a0;
-  --rook: #cf222e;
-  --rook-soft: rgba(207, 34, 46, 0.08);
-  --gold: #9a6700;
-  --glow: rgba(9, 105, 218, 0.3);
+  --accent-emphasis: #4574a8;
+  --border: #e2dfda;
+  --border-hover: #c9c4bc;
+  --control-border: #9b958c;
+  --rook: #b8544f;
+  --rook-soft: rgba(184, 84, 79, 0.08);
+  --gold: #93701f;
+  --glow: rgba(69, 116, 168, 0.25);
 
-  --sidebar-bg: #161b22;
-  --sidebar-text: #f0f6fc;
-  --sidebar-text-muted: #8b949e;
+  --sidebar-bg: #2b2925;
+  --sidebar-text: #ece9e4;
+  --sidebar-text-muted: #a8a29a;
   --sidebar-active-bg: var(--accent);
   --sidebar-active-text: #ffffff;
+
+  --footer-bg: #efece7;
+  --footer-text: #625d56;
+  --footer-heading: #33302c;
+  --footer-border: #ddd8d1;
 }
 
 :root {
@@ -260,8 +274,25 @@ summary:focus-visible {
 }
 .nav-group a.active .sq { color: var(--sidebar-active-text); opacity: 0.75; }
 
+.sidebar-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 4px 12px 0;
+}
+.sidebar-badge {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  color: var(--sidebar-text-muted);
+  border: 1px solid rgba(255,255,255,0.16);
+  border-radius: 20px;
+  padding: 2px 9px;
+  letter-spacing: 0.02em;
+}
+
 .sidebar-footer {
-  margin-top: 30px;
+  margin-top: 18px;
   padding-top: 18px;
   border-top: 1px solid rgba(255,255,255,0.12);
   font-size: 0.82rem;
@@ -315,12 +346,18 @@ summary:focus-visible {
 
 /* ---------- Main content ---------- */
 main {
-  padding: 56px 48px 100px;
+  padding: 56px 48px 0;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
 }
 .content {
   max-width: var(--content-max);
   margin: 0 auto;
+  padding-bottom: 80px;
+  width: 100%;
+  flex: 1 0 auto;
 }
 
 .eyebrow {
@@ -508,16 +545,6 @@ hr {
   margin: -8px 0 40px;
   padding-bottom: 8px;
 }
-.board-strip {
-  display: grid;
-  grid-template-columns: repeat(8, 1fr);
-  height: 10px;
-  border-radius: 3px;
-  overflow: hidden;
-  margin: 0 0 28px;
-}
-.board-strip span:nth-child(odd) { background: var(--text); transition: background-color var(--theme-duration) var(--theme-easing); }
-.board-strip span:nth-child(even) { background: var(--accent); transition: background-color var(--theme-duration) var(--theme-easing); }
 
 /* ---------- Table ---------- */
 table {
@@ -590,16 +617,87 @@ tr:hover td { background: var(--bg-secondary); }
 .page-nav .next { text-align: right; }
 
 /* ---------- Footer ---------- */
+/* The footer markup itself lives in assets/footer.js and is injected into
+   <div id="site-footer-slot"> on each page. Styling stays here so the
+   whole site keeps one visual source of truth. */
 .site-footer {
-  max-width: var(--content-max);
-  margin: 0 auto;
-  padding: 30px 0 10px;
-  font-size: 0.85rem;
-  color: var(--text-muted);
-  border-top: 1px solid var(--border);
-  margin-top: 20px;
+  background: var(--footer-bg);
+  border-top: 1px solid var(--footer-border);
+  margin-top: 56px;
+  text-align: center;
+  /* main has horizontal padding, so pull the footer out to the edges of
+     its own containing block to get a true full-width grey bar rather
+     than one that's indented to match the article padding. */
+  margin-left: -48px;
+  margin-right: -48px;
+  transition: background-color var(--theme-duration) var(--theme-easing),
+    border-color var(--theme-duration) var(--theme-easing);
 }
-.site-footer a { color: var(--text-muted); }
+
+.site-footer-inner {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 40px 48px 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.footer-brand-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  text-decoration: none;
+  color: var(--footer-heading);
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 1.1rem;
+  margin-bottom: 10px;
+}
+.footer-brand-link img { width: 22px; height: 22px; }
+
+.footer-tagline {
+  margin: 0 0 20px;
+  font-size: 0.92rem;
+  color: var(--footer-text);
+  line-height: 1.55;
+  max-width: 46ch;
+}
+
+.footer-links {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+}
+.footer-links a {
+  color: var(--footer-text);
+  text-decoration: none;
+  font-size: 0.9rem;
+}
+.footer-links a:hover { color: var(--accent); }
+.footer-links .footer-dot { color: var(--footer-border); }
+
+.site-footer-bottom {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 18px 48px 28px;
+  border-top: 1px solid var(--footer-border);
+}
+.site-footer-bottom p {
+  margin: 0 0 4px;
+  font-size: 0.8rem;
+  color: var(--footer-text);
+}
+.site-footer-bottom p:last-child { margin-bottom: 0; }
+.site-footer-bottom a {
+  color: var(--footer-text);
+  text-decoration: underline;
+  text-decoration-color: var(--footer-border);
+  text-underline-offset: 2px;
+}
+.site-footer-bottom a:hover { color: var(--accent); }
 
 /* ---------- Reduced motion ---------- */
 @media (prefers-reduced-motion: reduce) {
@@ -611,6 +709,9 @@ tr:hover td { background: var(--bg-secondary); }
 }
 
 /* ---------- Responsive ---------- */
+
+/* Tablet and below: collapse the sidebar into a slide-out drawer behind
+   the top bar, and start shrinking side padding. */
 @media (max-width: 900px) {
   .shell {
     grid-template-columns: 1fr;
@@ -628,7 +729,71 @@ tr:hover td { background: var(--bg-secondary); }
     box-shadow: 4px 0 24px rgba(0,0,0,0.35);
   }
   .sidebar.open { transform: translateX(0); }
-  main { padding: 32px 20px 80px; }
+
+  /* Dim/blocking overlay behind the open mobile drawer so a tap outside
+     it closes the menu instead of scrolling the page underneath. */
+  .sidebar-overlay {
+    display: none;
+    position: fixed;
+    inset: 57px 0 0 0;
+    background: rgba(0, 0, 0, 0.45);
+    z-index: 85;
+  }
+  .sidebar-overlay.open { display: block; }
+
+  main {
+    padding: 32px 24px 0;
+  }
+  .site-footer {
+    margin-left: -24px;
+    margin-right: -24px;
+  }
+  .site-footer-inner {
+    padding: 32px 24px 24px;
+  }
+  .site-footer-bottom {
+    padding: 16px 24px 24px;
+  }
+
   h1 { font-size: 1.9rem; }
   .card-grid { grid-template-columns: 1fr; }
+}
+
+/* Phones: single-column footer, tighter spacing, larger tap targets. */
+@media (max-width: 560px) {
+  main {
+    padding: 24px 16px 0;
+  }
+  .content {
+    padding-bottom: 56px;
+  }
+  h1 { font-size: 1.6rem; }
+  h2 { font-size: 1.3rem; margin: 36px 0 12px; }
+  .lede { font-size: 1.05rem; }
+
+  .btn-row { flex-direction: column; align-items: stretch; }
+  .btn { justify-content: center; }
+
+  .page-nav {
+    flex-direction: column;
+  }
+  .page-nav .next { text-align: left; }
+
+  table { font-size: 0.86rem; }
+  th, td { padding: 8px 8px; }
+
+  .site-footer {
+    margin-left: -16px;
+    margin-right: -16px;
+  }
+  .site-footer-inner {
+    padding: 28px 16px 20px;
+  }
+  .site-footer-bottom {
+    padding: 14px 16px 20px;
+  }
+
+  .topbar { padding: 12px 14px; }
+  .nav-toggle { padding: 8px 12px; font-size: 0.85rem; }
+  .theme-toggle { width: 40px; height: 40px; }
 }

@@ -77,17 +77,43 @@ document.addEventListener('DOMContentLoaded', function () {
   var navToggle = document.querySelector('.nav-toggle');
   var sidebar = document.querySelector('.sidebar');
 
+  // Overlay behind the mobile drawer: created here rather than hardcoded
+  // in every page's HTML, so it can't be forgotten on a new page.
+  var overlay = document.querySelector('.sidebar-overlay');
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.className = 'sidebar-overlay';
+    document.body.appendChild(overlay);
+  }
+
+  function closeSidebar() {
+    if (!sidebar) return;
+    sidebar.classList.remove('open');
+    overlay.classList.remove('open');
+    if (navToggle) navToggle.setAttribute('aria-expanded', 'false');
+  }
+
+  function openSidebar() {
+    if (!sidebar) return;
+    sidebar.classList.add('open');
+    overlay.classList.add('open');
+    if (navToggle) navToggle.setAttribute('aria-expanded', 'true');
+  }
+
   if (navToggle && sidebar) {
     navToggle.addEventListener('click', function () {
-      sidebar.classList.toggle('open');
       var expanded = sidebar.classList.contains('open');
-      navToggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+      if (expanded) closeSidebar(); else openSidebar();
     });
 
     sidebar.querySelectorAll('a').forEach(function (link) {
-      link.addEventListener('click', function () {
-        sidebar.classList.remove('open');
-      });
+      link.addEventListener('click', closeSidebar);
+    });
+
+    overlay.addEventListener('click', closeSidebar);
+
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') closeSidebar();
     });
   }
 
