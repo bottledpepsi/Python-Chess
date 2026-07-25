@@ -577,10 +577,13 @@ class App:
 
     def run(self) -> None:
         try:
-            while True:
-                self._frame()
-        except SystemExit:
-            raise
+            try:
+                while True:
+                    self._frame()
+            except SystemExit:
+                raise
+            except Exception:
+                self._handle_crash()
         finally:
             self.game.bot_worker.cancel()
             self.game.bot_worker.join(timeout=2.0)
@@ -591,6 +594,80 @@ class App:
             self.game.em_white_stockfish_worker.cancel()
             self.game.em_black_stockfish_worker.cancel()
             self.analysis_worker.stop_engine()
+
+    def _handle_crash(self) -> None:
+        """Last-resort handler for an exception that escaped the frame
+        loop. Never lets a *second* unhandled exception replace the
+        original one — every step here is best-effort and independently
+        guarded, since we have no idea what state the app is in.
+
+        Order of operations, each independent of the last succeeding:
+          1. Log the full traceback (the file logger from log.py, not
+             stdout — a --windowed build discards stdout entirely, so
+             that would otherwise be silent data loss for diagnosing
+             the crash).
+          2. Try to save the game one more time. write_save() is already
+             called after every completed move, so this is a belt-and-
+             braces attempt, not the only thing standing between the
+             player and a lost game.
+          3. Show a plain-pygame error screen (no render/ module calls —
+             those are exactly what might have just crashed) so the
+             player sees *something* other than the window silently
+             disappearing, and knows their progress up to the last move
+             is safe on disk.
+          4. Exit with a nonzero status so a wrapping process/launcher
+             (or a test) can tell this wasn't a normal quit.
+        """
+        self.logger.exception("Unhandled exception escaped the main loop")
+
+        try:
+            self.write_save()
+        except Exception:
+            self.logger.exception("Final save attempt during crash handling also failed")
+
+        try:
+            self._show_crash_screen()
+        except Exception:
+            self.logger.exception("Crash screen itself failed to display")
+
+        sys.exit(1)
+
+    def _show_crash_screen(self) -> None:
+        """Plain pygame.font/pygame.draw only — deliberately independent
+        of every chess_game.render module, since draw_board/draw_menus/
+        etc. are exactly the code that might have just thrown. Stays on
+        screen until the player closes the window or presses a key/
+        clicks, rather than flashing for one frame before the process
+        exits.
+        """
+        screen = self.screen
+        w, h = screen.get_size()
+        title_font = pygame.font.SysFont('Arial', 28, bold=True)
+        body_font = pygame.font.SysFont('Arial', 16)
+
+        lines = [
+            "Something went wrong and Python Chess needs to close.",
+            "",
+            "Your game was saved through your last completed move —",
+            "reopening the app will offer to resume it.",
+            "",
+            "Press any key, click, or close this window to exit.",
+        ]
+
+        screen.fill((22, 22, 22))
+        title = title_font.render("Unexpected error", True, (230, 120, 120))
+        screen.blit(title, title.get_rect(center=(w // 2, h // 2 - 90)))
+        for i, line in enumerate(lines):
+            surf = body_font.render(line, True, (210, 210, 210))
+            screen.blit(surf, surf.get_rect(center=(w // 2, h // 2 - 20 + i * 26)))
+        pygame.display.flip()
+
+        waiting = True
+        while waiting:
+            for event in pygame.event.get():
+                if event.type in (pygame.QUIT, pygame.KEYDOWN, pygame.MOUSEBUTTONDOWN):
+                    waiting = False
+            pygame.time.wait(50)
 
     def _frame(self) -> None:
         dt = self.clock.tick(60)
