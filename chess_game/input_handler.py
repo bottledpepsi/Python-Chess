@@ -109,6 +109,117 @@ class InputHandler:
         # Either way, the drag is finished.
         self._reset_drag()
 
+    def _activate_square(self, sq: int, *, mx: int | None = None, my: int | None = None,
+                          arm_drag: bool) -> None:
+        """Select/move/deselect at `sq`, exactly as a plain (non-drag) click
+        on it would — this is the shared path for a mouse click and for
+        the keyboard cursor's Enter/Space activation (see
+        InputHandler._handle_kb_cursor_activate), so the two input methods
+        can never behave differently for the same logical action.
+
+        mx/my are only used to seed a potential drag when arm_drag is True
+        (mouse path); the keyboard path passes arm_drag=False and no
+        position, since there's no cursor motion to promote into a drag.
+
+        Guarded by the same bot_to_move / stale-bot_thinking check the
+        mouse path already applied, so a keyboard press can't sneak a move
+        in while it isn't the player's turn.
+        """
+        app = self.app
+        g = app.game
+        assert g.adapter is not None
+        bot_to_move = (g.state == GameState.BOT and g.adapter.turn != g.player_color)
+        if bot_to_move or (g.state == GameState.BOT and g.bot_thinking):
+            return
+        result = g.adapter.handle_click(sq)
+        if result in ('move', 'capture', 'en_passant'):
+            if g.state == GameState.PVP and g.clock is not None:
+                g.clock.switch()
+            piece = g.adapter.board.piece_at(g.adapter.anim_to)
+            img = g.piece_imgs.get((piece.piece_type, piece.color)) if piece else None
+            g.start_anim(g.adapter.anim_from, g.adapter.anim_to, img)
+            is_check = g.adapter.check_square is not None
+            is_over = g.adapter.is_game_over
+            app.sounds.play_for_move_result(result, is_check=is_check, is_game_over=is_over)
+            app.write_save()
+            app._restart_analysis_if_enabled()
+            if g.state == GameState.BOT and not g.adapter.promotion_pending:
+                app.launch_bot_move()
+            elif g.state == GameState.PVP and not g.adapter.promotion_pending and not is_over:
+                # Queue a board flip for when the slide animation finishes
+                # so the next player sits at the bottom on their turn.
+                g.pending_pvp_flip = True
+        elif result == 'selected' and arm_drag:
+            # A piece was selected — arm a potential drag so the user can
+            # either release (pure click, piece stays selected) or drag
+            # the piece to a target. Only meaningful for a real mouse
+            # press; the keyboard path has no cursor motion to promote.
+            assert mx is not None and my is not None
+            self._start_drag(g.adapter.selected_square, mx, my)
+        # 'deselected', 'promotion', and None need no further action here.
+
+    # ── Keyboard board navigation ────────────────────────────────────────────
+
+    def _default_kb_cursor_sq(self) -> int:
+        """Starting square for the keyboard cursor on its first appearance:
+        the square of the king belonging to the side to move, which always
+        exists and is a natural, discoverable place to begin navigating
+        from. Falls back to e1 in the unreachable case of no king on the
+        board (e.g. an exotic constructed position in tests)."""
+        g = self.app.game
+        assert g.adapter is not None
+        king_sq = g.adapter.board.king(g.adapter.board.turn)
+        return king_sq if king_sq is not None else chess.E1
+
+    def _move_kb_cursor(self, dx: int, dy: int) -> None:
+        """Move the keyboard cursor by (dx, dy) files/ranks on the *visual*
+        board, so pressing 'up' always moves the cursor toward the top of
+        the screen regardless of board orientation — matching how arrow
+        keys already work everywhere else (sliders, review scrubbing).
+        """
+        g = self.app.game
+        if g.kb_cursor_sq is None:
+            g.kb_cursor_sq = self._default_kb_cursor_sq()
+            return
+        file = chess.square_file(g.kb_cursor_sq)
+        rank = chess.square_rank(g.kb_cursor_sq)
+        # Flipping the board also flips which screen direction each file/
+        # rank delta corresponds to, so invert both axes when flipped to
+        # keep the cursor's on-screen movement direction constant.
+        if g.board_flipped:
+            dx, dy = -dx, -dy
+        new_file = max(0, min(7, file + dx))
+        new_rank = max(0, min(7, rank + dy))
+        g.kb_cursor_sq = chess.square(new_file, new_rank)
+
+    def _handle_kb_cursor_event(self, event) -> bool:
+        """Handle WASD (move cursor) and Enter/Space (activate) for the
+        keyboard-only board navigation cursor. Returns True if the event
+        was consumed.
+
+        WASD rather than the arrow keys because Left/Right are already
+        bound to move-history scrubbing in every game state (see the
+        K_LEFT/K_RIGHT branch in _handle_game_event) — reusing them here
+        would make that existing shortcut ambiguous. Only active for
+        PVP/BOT play; review mode and animations/flips already block
+        mouse interaction the same way (see the callers of this method).
+        """
+        if event.type != pygame.KEYDOWN:
+            return False
+        g = self.app.game
+        key_deltas = {
+            pygame.K_w: (0, 1), pygame.K_s: (0, -1),
+            pygame.K_a: (-1, 0), pygame.K_d: (1, 0),
+        }
+        if event.key in key_deltas:
+            dx, dy = key_deltas[event.key]
+            self._move_kb_cursor(dx, dy)
+            return True
+        if event.key in (pygame.K_RETURN, pygame.K_SPACE) and g.kb_cursor_sq is not None:
+            self._activate_square(g.kb_cursor_sq, arm_drag=False)
+            return True
+        return False
+
     # ── Event dispatch ───────────────────────────────────────────────────────
 
     def handle_event(self, event: pygame.event.Event, mx: int, my: int) -> None:
@@ -942,6 +1053,12 @@ class InputHandler:
                 pt = promo_key_map.get(event.key)
                 if pt is not None:
                     self._complete_promotion(pt)
+            elif not (g.review.active or is_animating or g.game_over or flip_in_progress):
+                # Same conditions that already block mouse board interaction
+                # a few branches below — a board flip, an in-flight
+                # animation, review mode, or a finished game all mean there
+                # is nothing on the board for the keyboard cursor to act on.
+                self._handle_kb_cursor_event(event)
 
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             # A fresh press ends any previous drag cycle (e.g. a mouseup that
@@ -999,39 +1116,8 @@ class InputHandler:
             else:
                 bx, by = mx - theme.BOARD_X, my - theme.BOARD_Y
                 if 0 <= bx < theme.BOARD_PX and 0 <= by < theme.BOARD_PX:
-                    # Avoid a precedence bug that could drop PvP clicks when
-                    # a stale bot_thinking flag was present.
-                    bot_to_move = (g.state == GameState.BOT and g.adapter.turn != g.player_color)
-                    if bot_to_move or (g.state == GameState.BOT and g.bot_thinking):
-                        pass
-                    else:
-                        sq = layout.pixel_to_sq(bx, by, g.board_flipped)
-                        result = g.adapter.handle_click(sq)
-                        if result in ('move', 'capture', 'en_passant'):
-                            if g.state == GameState.PVP and g.clock is not None:
-                                g.clock.switch()
-                            piece = g.adapter.board.piece_at(g.adapter.anim_to)
-                            img = g.piece_imgs.get((piece.piece_type, piece.color)) if piece else None
-                            g.start_anim(g.adapter.anim_from, g.adapter.anim_to, img)
-                            is_check = g.adapter.check_square is not None
-                            is_over = g.adapter.is_game_over
-                            app.sounds.play_for_move_result(result, is_check=is_check, is_game_over=is_over)
-                            app.write_save()
-                            app._restart_analysis_if_enabled()
-                            if g.state == GameState.BOT and not g.adapter.promotion_pending:
-                                app.launch_bot_move()
-                            elif g.state == GameState.PVP and not g.adapter.promotion_pending and not is_over:
-                                # Queue a board flip for when the slide
-                                # animation finishes so the next player
-                                # sits at the bottom on their turn.
-                                g.pending_pvp_flip = True
-                        elif result == 'selected':
-                            # A piece was selected — arm a potential drag so
-                            # the user can either release (pure click, piece
-                            # stays selected) or drag the piece to a target.
-                            self._start_drag(g.adapter.selected_square, mx, my)
-                        # 'deselected', 'promotion', and None leave the drag
-                        # state already reset by the _reset_drag() above.
+                    sq = layout.pixel_to_sq(bx, by, g.board_flipped)
+                    self._activate_square(sq, mx=mx, my=my, arm_drag=True)
 
         elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 3:
             bx, by = mx - theme.BOARD_X, my - theme.BOARD_Y

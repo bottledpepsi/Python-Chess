@@ -18,6 +18,9 @@ from chess_game.theme import (
     SQ_SEL_L,
     TILE,
 )
+from chess_game.widgets import FOCUS_RING
+
+KB_CURSOR_WIDTH = 3
 
 _IND_R = TILE // 2
 _ind_dot: pygame.Surface | None = None
@@ -56,11 +59,18 @@ def draw_board(
     sel_sq,
     targets,
     suppress,
+    kb_cursor_sq=None,
 ):
     """Draw squares, highlights, pieces, and move indicators onto board_surf.
 
     Pure: takes the surface and all the data it needs, mutates only that
     surface. No globals, no module-level adapter/board_flipped reads.
+
+    kb_cursor_sq, if given, is the square currently focused by keyboard-only
+    board navigation (see InputHandler._move_kb_cursor). It's drawn as an
+    outline on top of whatever fill/pieces/indicators the square already
+    has, rather than a fill of its own, so it never hides the selection
+    highlight, check highlight, or a legal-move indicator underneath it.
     """
     theme = BOARD_THEMES[board_theme_name]
     theme_light, theme_dark = theme["light"], theme["dark"]
@@ -96,6 +106,9 @@ def draw_board(
                 has_piece = board.piece_at(sq) is not None and not (suppress and sq in suppress)
                 surf = ind_ring if has_piece else ind_dot
                 board_surf.blit(surf, (cx - _IND_R, cy - _IND_R))
+
+            if sq == kb_cursor_sq:
+                pygame.draw.rect(board_surf, FOCUS_RING, rect, KB_CURSOR_WIDTH)
 
 
 def draw_labels(screen, board_flipped, fonts):

@@ -114,6 +114,14 @@ class Game:
     all_arrows: list = field(default_factory=list)
     arrow_start_sq: int | None = None
 
+    # Square currently focused by keyboard-only board navigation (arrow
+    # keys move it, Enter/Space select/move exactly like a mouse click on
+    # it would). None until the player's first arrow-key press during
+    # PVP/BOT play, so mouse-only players never see an extra ring drawn
+    # on the board. Reset to None whenever a game (re)starts or review
+    # mode is entered/exited — see Game.start_game and review.py.
+    kb_cursor_sq: int | None = None
+
     board_theme: str = "white_green"
     arrow_theme: str = "blue"
     reduced_motion: bool = False
@@ -235,6 +243,7 @@ class Game:
         self.pending_pvp_flip = False
         self.review.reset()
         self.panel_scroll = 0
+        self.kb_cursor_sq = None
         self.analysis_epoch = None
         self.eval_bar_display_ratio = None
         self.clear_analysis_display()

@@ -1046,9 +1046,10 @@ class App:
 
         render_board.draw_labels(self.screen, g.board_flipped, self.fonts)
 
+        kb_cursor_sq = g.kb_cursor_sq if not g.review.active else None
         render_board.draw_board(
             self.board_surf, board, g.piece_imgs, g.board_theme, g.board_flipped,
-            check_sq, last_move, sel_sq, targets, suppress,
+            check_sq, last_move, sel_sq, targets, suppress, kb_cursor_sq,
         )
 
         is_engine_match = (g.state == GameState.ENGINE_MATCH)
