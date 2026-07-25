@@ -16,6 +16,7 @@ from chess_game.theme import (
     DIFF_TIER,
     MENU_ACCENT,
     MENU_ACCENT_BRIGHT,
+    MENU_ACCENT_TEXT,
     MENU_BG,
     MENU_TEXT,
     MENU_TEXT_SUB,
@@ -432,7 +433,7 @@ def draw_engine_match_setup(screen, em_white_kind, em_white_level, em_white_elo,
             brd = MENU_ACCENT_BRIGHT if selected else ((90, 90, 98) if hov else (66, 66, 74))
             pygame.draw.rect(screen, bg, rect, border_radius=8)
             pygame.draw.rect(screen, brd, rect, 2 if selected else 1, border_radius=8)
-            lbl_col = MENU_TEXT if selected else MENU_TEXT_SUB
+            lbl_col = MENU_ACCENT_TEXT if selected else MENU_TEXT_SUB
             lbl_s = fonts.btn_sub.render(seg_label, True, lbl_col)
             screen.blit(lbl_s, lbl_s.get_rect(center=rect.center))
             engine_rects[key] = rect
@@ -795,7 +796,7 @@ def draw_preferences(screen, current_board_theme, current_arrow_theme, reduced_m
         brd = MENU_ACCENT_BRIGHT if selected else ((90, 90, 98) if hov else (66, 66, 74))
         pygame.draw.rect(screen, bg, rect, border_radius=8)
         pygame.draw.rect(screen, brd, rect, 2 if selected else 1, border_radius=8)
-        lbl_col = MENU_TEXT if selected else MENU_TEXT_SUB
+        lbl_col = MENU_ACCENT_TEXT if selected else MENU_TEXT_SUB
         lbl_s = fonts.btn_sub.render(label, True, lbl_col)
         screen.blit(lbl_s, lbl_s.get_rect(center=rect.center))
         engine_rects[key] = rect

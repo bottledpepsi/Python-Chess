@@ -126,6 +126,31 @@ def test_draw_menus():
     menus.draw_main_menu_overlay(screen, fonts, PANEL_X)
 
 
+def test_selected_bot_engine_segment_uses_fixed_label_color():
+    """Renders the real Preferences screen and scans the selected Bot
+    Engine segment for actual pixels, closing the loop between "the
+    theme constant is correct" (see test_theme_contrast.py) and "the
+    screen actually shows it" — a wrong variable name in menus.py would
+    pass the former but not this.
+    """
+    from chess_game.theme import MENU_ACCENT_TEXT, MENU_TEXT
+
+    fonts = load_fonts()
+    screen = pygame.Surface((WIN_W, WIN_H))
+    (*_rest, engine_rects, _sound_rect) = menus.draw_preferences(
+        screen, "white_green", "blue", False, "", fonts, bot_engine_pref="native",
+    )
+    selected_rect = engine_rects["native"]  # selected, since bot_engine_pref="native"
+
+    colors = {
+        screen.get_at((x, y))[:3]
+        for x in range(selected_rect.x, selected_rect.right, 2)
+        for y in range(selected_rect.y, selected_rect.bottom, 2)
+    }
+    assert MENU_ACCENT_TEXT in colors, "selected label should render in MENU_ACCENT_TEXT"
+    assert MENU_TEXT not in colors, "selected label must not use the low-contrast MENU_TEXT"
+
+
 def test_draw_eval_bar_mate_orientation_pixel_correctness():
     """Pixel-level check (not just "doesn't raise") that scores fill the
     bar from the correct end, that mate scores peg fully to the correct

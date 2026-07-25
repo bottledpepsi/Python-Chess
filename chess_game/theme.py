@@ -51,6 +51,11 @@ MENU_BTN_HOV = (55, 55, 55)
 MENU_BTN_DIS = (30, 30, 30)
 MENU_BTN_BRD = (70, 70, 70)
 MENU_TEXT = (220, 220, 220)
+# Label colour for text drawn on an MENU_ACCENT fill (selected segmented-
+# control buttons — Bot Engine picker, Engine Match setup). MENU_TEXT
+# itself only reaches ~2.4:1 on that fill, well under WCAG AA; near-black
+# text does far better on this particular mid-tone green.
+MENU_ACCENT_TEXT = (16, 16, 16)         # ~5.7:1 on MENU_ACCENT (was MENU_TEXT ~2.4:1)
 MENU_TEXT_SUB = (150, 150, 150)      # was (110,110,110) ~3.5:1 on MENU_BG -> ~4.7:1
 MENU_TEXT_DIS = (118, 118, 118)      # was (70,70,70) ~1.6:1 on (30,30,30) -> ~4.5:1
 PICK_LIGHT = (238, 238, 210)
