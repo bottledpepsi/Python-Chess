@@ -104,10 +104,11 @@
       </ul>
 
       <h2>Moving pieces</h2>
-      <p>You can move pieces two ways, whichever feels more natural to you:</p>
+      <p>You can move pieces however feels most natural to you:</p>
       <ul>
         <li><strong>Click to move.</strong> Click a piece to select it, then click the square you want to move it to.</li>
         <li><strong>Drag and drop.</strong> Click and hold a piece, drag it over, and let go.</li>
+        <li><strong>Keyboard.</strong> Press <code>W</code> <code>A</code> <code>S</code> <code>D</code> to move a highlighted square around the board, then <code>Enter</code> or <code>Space</code> to select a piece there or move it to that square — the same select-then-move flow as clicking, without touching the mouse.</li>
       </ul>
       <p>Squares you can legally move to get marked with a dot. If a move would capture something, you'll see a ring around that square instead. The square a piece moved from and to stays highlighted, and if your king's in check, that square lights up too.</p>
 
@@ -118,33 +119,34 @@
       <p>Click and drag with the <strong>right</strong> mouse button to draw an arrow on the board. Handy for planning a move out loud, or showing the person you're playing what you're thinking. Left-click anywhere on the board and your arrows clear.</p>
 
       <h2>During the game</h2>
-      <p>A few buttons stick around while you're playing:</p>
+      <p>A few buttons stick around while you're playing, in the top-right corner. <code>Tab</code> cycles through them and <code>Enter</code> or <code>Space</code> activates whichever one is highlighted, if you'd rather not reach for the mouse:</p>
       <ul>
-        <li><strong>Menu.</strong> Save and quit, or duck into Preferences without losing your spot.</li>
-        <li><strong>Analysis.</strong> Turns on live move evaluation, see <a href="features.html#analysis">Features: Analysis mode</a>.</li>
-        <li><strong>Resign</strong> and <strong>Offer Draw.</strong> Both show up in two-player and computer games. Neither can be undone, so you'll get asked to confirm first.</li>
+        <li><strong>Resign</strong> and <strong>Offer Draw.</strong> Both show up in two-player and computer games. Neither can be undone, so you'll get asked to confirm first — the confirmation itself currently needs a mouse click, even if you opened it with the keyboard.</li>
         <li><strong>Export PGN.</strong> Saves the current game to a file. Details in <a href="saves-and-export.html">Saves &amp; exporting games</a>.</li>
+        <li><strong>Analysis.</strong> Turns on live move evaluation, see <a href="features.html#analysis">Features: Analysis mode</a>.</li>
+        <li><strong>Menu.</strong> Save and quit, or duck into Preferences without losing your spot.</li>
       </ul>
 
       <h2>Reviewing a finished game</h2>
       <p>Once a game ends, you'll see the result along with two options. <strong>Rematch</strong> starts a fresh game with the same settings, and <strong>Review Game</strong> lets you step back through every move that was played. While reviewing, use the arrow keys or click any move in the history panel to jump straight there.</p>
 
-      <h2>Keyboard shortcuts</h2>
+      <h2 id="keyboard-shortcuts">Keyboard shortcuts</h2>
       <table>
         <thead>
           <tr><th>Key</th><th>What it does</th></tr>
         </thead>
         <tbody>
+          <tr><td><code>W</code> <code>A</code> <code>S</code> <code>D</code></td><td>Move the keyboard cursor around the board</td></tr>
+          <tr><td><code>Enter</code> / <code>Space</code></td><td>Select a piece under the keyboard cursor, or move it there — or, if a button is focused (see <code>Tab</code> below), activate that instead</td></tr>
           <tr><td><code>←</code></td><td>Step backward through move history</td></tr>
           <tr><td><code>→</code></td><td>Step forward through move history</td></tr>
           <tr><td><code>Q</code> / <code>R</code> / <code>B</code> / <code>N</code></td><td>Choose promotion piece (queen, rook, bishop, knight)</td></tr>
           <tr><td><code>F11</code></td><td>Toggle fullscreen</td></tr>
           <tr><td><code>Esc</code></td><td>Cancel or back out of a menu</td></tr>
-          <tr><td><code>Tab</code> / <code>Shift+Tab</code></td><td>Move keyboard focus between buttons and controls</td></tr>
-          <tr><td><code>Enter</code> / <code>Space</code></td><td>Activate whatever's currently focused</td></tr>
+          <tr><td><code>Tab</code> / <code>Shift+Tab</code></td><td>Move keyboard focus between buttons and controls, including the Resign/Offer Draw/Export PGN/Analysis/Menu row during a game</td></tr>
         </tbody>
       </table>
-      <p>Every part of the app works with just a keyboard too, see <a href="features.html#accessibility">Features: Accessibility</a>.</p>
+      <p>Almost every part of the app works with just a keyboard, see <a href="features.html#accessibility">Features: Accessibility</a>.</p>
 
       <div class="page-nav">
         <a class="prev" href="installation.html">
