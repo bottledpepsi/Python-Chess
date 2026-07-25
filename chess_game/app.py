@@ -177,6 +177,15 @@ class App:
         self.pref_engine_rects: dict = {}
         self.pref_focus = FocusGroup([])
 
+        # Tab-cycling for the in-game action button row (Resign/Offer
+        # Draw/Export PGN/Analysis toggle/Menu) in PVP and BOT — see
+        # _render_game for where this is rebuilt each frame and
+        # InputHandler._handle_game_event for where Enter/Space on a
+        # focused button is read back. Not used in ENGINE_MATCH, which
+        # has no human player to resign/offer a draw and keeps its own
+        # separate (mouse-only, for now) Pause/Step controls.
+        self.game_focus = FocusGroup([])
+
         # Stockfish auto-download status: 'idle'/'downloading'/'done'/'error'.
         # The downloader is polled each frame like the other worker threads.
         self.stockfish_downloader = StockfishDownloader()
@@ -1325,10 +1334,30 @@ class App:
                 pygame.draw.rect(self.screen, rs_brd, self.resign_btn_ingame_rect, 1, border_radius=6)
                 rs_s = self.fonts.igmenu.render('Resign', True, (230, 210, 200) if resign_hov else (190, 160, 140))
                 self.screen.blit(rs_s, rs_s.get_rect(center=self.resign_btn_ingame_rect.center))
+
+                # Tab-cycling for this row, left to right matching the
+                # on-screen layout, so Tab order is predictable without
+                # needing to look at the screen. Rebuilt every frame like
+                # pref_focus above, since the rects themselves are
+                # recomputed every frame too.
+                self.game_focus.rebuild([
+                    FocusableRect(self.resign_btn_ingame_rect, 'resign'),
+                    FocusableRect(self.draw_btn_ingame_rect, 'draw'),
+                    FocusableRect(self.export_btn_ingame_rect, 'export'),
+                    FocusableRect(self.analysis_toggle_rect, 'analysis'),
+                    FocusableRect(self.menu_btn_ingame_rect, 'menu'),
+                ])
+                self._draw_focus_ring(self.game_focus)
             else:
                 self.export_btn_ingame_rect = None
                 self.draw_btn_ingame_rect = None
                 self.resign_btn_ingame_rect = None
+                # No Resign/Draw/Export to focus in ENGINE_MATCH (no human
+                # player) — clear rather than leave a stale group so a
+                # leftover Tab-focused rect from a previous PVP/BOT game
+                # can't still show a ring or respond to Enter here.
+                self.game_focus.clear()
+                self.game_focus.widgets = []
 
             # Draw eval bar before the dragged piece so the dragged piece
             # renders on top of the eval bar.

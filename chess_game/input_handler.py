@@ -158,6 +158,35 @@ class InputHandler:
             self._start_drag(g.adapter.selected_square, mx, my)
         # 'deselected', 'promotion', and None need no further action here.
 
+    def _activate_ingame_action(self, key: str) -> None:
+        """Perform the action for one of the 5 in-game action buttons
+        (Resign/Offer Draw/Export PGN/Analysis toggle/Menu), identified by
+        the same key string used for both the game_focus FocusableRects
+        (see App._render_game) and a plain mouse click on the matching
+        rect — the shared path so the two input methods can't diverge,
+        mirroring _activate_square's role for the board itself.
+        """
+        app = self.app
+        g = app.game
+        if key == 'resign':
+            if g.state == GameState.PVP:
+                resigning = g.adapter.turn.capitalize()
+                msg = f'{resigning} resigns and loses the game. Continue?'
+            else:
+                msg = 'Resign this game? The bot will be awarded the win.'
+            g.confirm_dialog = {'action': 'resign', 'message': msg}
+        elif key == 'draw':
+            g.confirm_dialog = {
+                'action': 'draw',
+                'message': 'End the game as a draw by agreement?',
+            }
+        elif key == 'export':
+            app.export_pgn()
+        elif key == 'analysis':
+            app._toggle_analysis()
+        elif key == 'menu':
+            g.main_menu_overlay = True
+
     # ── Keyboard board navigation ────────────────────────────────────────────
 
     def _default_kb_cursor_sq(self) -> int:
@@ -325,6 +354,8 @@ class InputHandler:
             GameState.STOCKFISH_DIFFICULTY: app.sf_diff_focus,
             GameState.ENGINE_SETUP: app.em_setup_focus,
             GameState.PREFERENCES: app.pref_focus,
+            GameState.PVP: app.game_focus,
+            GameState.BOT: app.game_focus,
         }.get(state)
 
     def _handle_escape(self) -> bool:
@@ -1041,7 +1072,14 @@ class InputHandler:
         flip_in_progress = g.flip is not None and g.flip.is_active(now_ms)
 
         if event.type == pygame.KEYDOWN:
-            if event.key in (pygame.K_LEFT, pygame.K_RIGHT):
+            activated_action = None
+            for focusable in app.game_focus.widgets:
+                if focusable.activated_by_key(event):
+                    activated_action = focusable.key
+                    break
+            if activated_action is not None:
+                self._activate_ingame_action(activated_action)
+            elif event.key in (pygame.K_LEFT, pygame.K_RIGHT):
                 move_review(g, -1 if event.key == pygame.K_LEFT else 1)
             elif g.adapter.promotion_pending:
                 promo_key_map = {
@@ -1066,23 +1104,15 @@ class InputHandler:
             # if this press selects a piece.
             self._reset_drag()
             if app.resign_btn_ingame_rect and app.resign_btn_ingame_rect.collidepoint(mx, my):
-                if g.state == GameState.PVP:
-                    resigning = g.adapter.turn.capitalize()
-                    msg = f'{resigning} resigns and loses the game. Continue?'
-                else:
-                    msg = 'Resign this game? The bot will be awarded the win.'
-                g.confirm_dialog = {'action': 'resign', 'message': msg}
+                self._activate_ingame_action('resign')
             elif app.draw_btn_ingame_rect and app.draw_btn_ingame_rect.collidepoint(mx, my):
-                g.confirm_dialog = {
-                    'action': 'draw',
-                    'message': 'End the game as a draw by agreement?',
-                }
+                self._activate_ingame_action('draw')
             elif app.export_btn_ingame_rect and app.export_btn_ingame_rect.collidepoint(mx, my):
-                app.export_pgn()
+                self._activate_ingame_action('export')
             elif app.analysis_toggle_rect and app.analysis_toggle_rect.collidepoint(mx, my):
-                app._toggle_analysis()
+                self._activate_ingame_action('analysis')
             elif app.menu_btn_ingame_rect and app.menu_btn_ingame_rect.collidepoint(mx, my):
-                g.main_menu_overlay = True
+                self._activate_ingame_action('menu')
             elif mx >= theme.PANEL_X:
                 if (app._live_btn_rect and app._live_btn_rect.collidepoint(mx, my)
                         and g.review.active):
