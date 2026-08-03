@@ -10,9 +10,9 @@ A chess game for your computer. Play a friend on the same screen, or play agains
 
 ## What is this?
 
-Python Chess is a free, open source chess app with a clean board, smooth animations, and no ads or accounts. Play locally against a friend, or challenge a computer opponent with 10 difficulty levels, from beginner-friendly all the way up to genuinely tough.
+Python Chess is a free, open source chess app with a clean board, smooth animations, and no ads or accounts. Play locally against a friend, or challenge a computer opponent with 10 difficulty levels, from beginner-friendly to genuinely tough.
 
-Turn on live analysis to see how strong each move is, add a chess clock if you want timed games, and don't worry about losing your progress. Everything saves automatically as you go.
+Turn on live analysis to see how strong each move is, add a chess clock for timed games, and don't worry about losing your progress: everything saves automatically as you go.
 
 ## Highlights
 
@@ -27,15 +27,15 @@ Turn on live analysis to see how strong each move is, add a chess clock if you w
 
 ## Getting started
 
-The easiest way to play is to download a ready-to-run version for your computer. No setup needed.
+The easiest way to play is to download a ready-to-run version for your computer, no setup needed.
 
 👉 **[Download the latest version](https://github.com/bottledpepsi/Python-Chess/releases)**
 
-Prefer to run it from source, or want to build it yourself? Check out the **[Installation Guide](https://bottledpepsi.github.io/Python-Chess/installation.html)** in the documentation.
+Prefer to run it from source, or build it yourself? Check out the **[Installation Guide](https://bottledpepsi.github.io/Python-Chess/installation.html)** in the documentation.
 
 ## Documentation
 
-Everything else, how to play, all the features, settings, and fixes for common problems, lives on the documentation site:
+Everything else — how to play, every feature, settings, and fixes for common problems — lives on the documentation site:
 
 **[bottledpepsi.github.io/Python-Chess](https://bottledpepsi.github.io/Python-Chess/)**
 
