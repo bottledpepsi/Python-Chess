@@ -11,3 +11,4 @@ __pycache__/
 .ruff_cache/
 *.tmp
 .coverage
+.DS_Store
