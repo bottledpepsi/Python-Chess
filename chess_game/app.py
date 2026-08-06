@@ -641,10 +641,10 @@ class App:
             except Exception:
                 self.logger.exception("Error shutting down native worker")
         # Stockfish subprocess workers: cancel + join + quit the process.
-        for worker in (g.stockfish_bot_worker, g.em_white_stockfish_worker,
-                       g.em_black_stockfish_worker):
+        for sf_worker in (g.stockfish_bot_worker, g.em_white_stockfish_worker,
+                          g.em_black_stockfish_worker):
             try:
-                worker.stop_engine()
+                sf_worker.stop_engine()
             except Exception:
                 self.logger.exception("Error shutting down Stockfish worker")
         # Analysis worker (closes its own UCI subprocess).
