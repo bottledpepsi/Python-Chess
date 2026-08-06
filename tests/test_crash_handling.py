@@ -43,8 +43,8 @@ def test_handle_crash_logs_exits_and_shows_screen(app, caplog):
         with pytest.raises(SystemExit) as exc_info:
             try:
                 raise RuntimeError("boom")
-            except RuntimeError:
-                app._handle_crash()
+            except RuntimeError as exc:
+                app._handle_crash(exc)
     assert exc_info.value.code == 1
     assert any("Unhandled exception" in r.message for r in caplog.records)
 
@@ -61,8 +61,8 @@ def test_handle_crash_attempts_final_save(app):
     with pytest.raises(SystemExit):
         try:
             raise RuntimeError("boom")
-        except RuntimeError:
-            app._handle_crash()
+        except RuntimeError as exc:
+            app._handle_crash(exc)
 
     saved = save_io.read_save('pvp')
     assert saved is not None
@@ -82,8 +82,8 @@ def test_handle_crash_survives_a_broken_save(app, monkeypatch, caplog):
         with pytest.raises(SystemExit) as exc_info:
             try:
                 raise RuntimeError("boom")
-            except RuntimeError:
-                app._handle_crash()
+            except RuntimeError as exc:
+                app._handle_crash(exc)
     assert exc_info.value.code == 1
     assert any("Final save attempt" in r.message for r in caplog.records)
 
@@ -100,8 +100,8 @@ def test_handle_crash_survives_a_broken_crash_screen(app, monkeypatch, caplog):
         with pytest.raises(SystemExit) as exc_info:
             try:
                 raise RuntimeError("boom")
-            except RuntimeError:
-                app._handle_crash()
+            except RuntimeError as exc:
+                app._handle_crash(exc)
     assert exc_info.value.code == 1
     assert any("Crash screen itself failed" in r.message for r in caplog.records)
 
@@ -124,8 +124,8 @@ def test_run_routes_an_escaped_exception_through_handle_crash(app, monkeypatch):
     monkeypatch.setattr(app, "_frame", _boom)
 
     handled = []
-    def _fake_handle_crash():
-        handled.append(True)
+    def _fake_handle_crash(exc):
+        handled.append(exc)
         raise SystemExit(1)
     monkeypatch.setattr(app, "_handle_crash", _fake_handle_crash)
 
@@ -135,5 +135,7 @@ def test_run_routes_an_escaped_exception_through_handle_crash(app, monkeypatch):
     with pytest.raises(SystemExit):
         app.run()
 
-    assert handled == [True]
+    assert len(handled) == 1
+    assert isinstance(handled[0], RuntimeError)
+    assert str(handled[0]) == "boom"
     assert cancelled == [True]  # outer finally still ran worker cleanup
