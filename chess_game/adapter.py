@@ -138,11 +138,19 @@ class ChessAdapter:
             return 'deselected'
 
     def complete_promotion(self, piece_type):
+        if self.promotion_pending is None:
+            return None
         move = chess.Move(
             self.promotion_pending.from_square,
             self.promotion_pending.to_square,
             promotion=piece_type,
         )
+        # Defensive: never trust the armed promotion blindly. If anything
+        # mutated the board between arming and completion, an illegal move
+        # here would corrupt adapter/board state. Reject rather than push.
+        if move not in self.board.legal_moves:
+            self.promotion_pending = None
+            return None
         result = self._push(move)
         self.promotion_pending = None
         return result

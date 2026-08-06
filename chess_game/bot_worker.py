@@ -50,8 +50,20 @@ class BotWorker:
         to retrieve the result only if it's still current.
         """
         logger = get_logger()
+        prior_thread = self._thread
         self.cancel()
         self.join(timeout=2.0)
+        if prior_thread is not None and prior_thread.is_alive():
+            # The previous search didn't respond to abort within the join
+            # window. Its result is stale (guarded by the epoch check in
+            # take()) and will be discarded, but the orphaned thread may
+            # briefly mutate the shared _tt/_history dicts before it winds
+            # down — surface this so it isn't silently lost.
+            logger.warning(
+                "Prior bot search did not finish within the 2s join timeout; "
+                "discarding its result (epoch guard) but it may briefly race "
+                "on shared bot state."
+            )
 
         self._epoch += 1
         epoch = self._epoch

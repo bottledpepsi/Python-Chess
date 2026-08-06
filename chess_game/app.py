@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import sys
+import traceback
 
 import chess
 import chess.pgn
@@ -83,6 +84,14 @@ class App:
         pygame.display.set_caption('Python Chess')
         self.board_surf = pygame.Surface((theme.BOARD_PX, theme.BOARD_PX), pygame.SRCALPHA)
         self._board_surf_dirty = True
+        # P5: signature of the inputs last used to paint board_surf, so the
+        # 64-square board can be skipped when nothing affecting its pixels
+        # has changed. None forces a repaint on the first render.
+        self._board_surf_signature: tuple | None = None
+        # P3: a single reusable darkening veil for the board-flip animation,
+        # refilled each frame instead of allocating a fresh SRCALPHA surface
+        # for the ~600 ms flip duration.
+        self._flip_veil_surf = pygame.Surface((theme.BOARD_PX, theme.BOARD_PX), pygame.SRCALPHA)
 
         self.fonts = theme.load_fonts()
         self.assets = load_images(resource_path)
@@ -133,6 +142,11 @@ class App:
         self.diff_slider_dragging = False
         self.diff_level = 5
         self.diff_focus = FocusGroup([])
+        # History-panel per-ply rects and the "live" eval button rect,
+        # rebuilt each frame in _render_game. Instance-level (not class-level)
+        # so concurrent App instances in tests can't share one list.
+        self._history_ply_rects: list = []
+        self._live_btn_rect: pygame.Rect | None = None
 
         # Time-control preset picker (GameState.TIME_CONTROL_PICK), reached
         # from the home screen's Play a Friend card for a fresh PvP game. tc_choice
@@ -202,6 +216,13 @@ class App:
         # GameState.ENGINE_MATCH (see draw_engine_match_menu_overlay).
         self.em_overlay_export_btn: pygame.Rect | None = None
         self.em_overlay_quit_btn: pygame.Rect | None = None
+        # The exact box rect drawn by draw_main_menu_overlay /
+        # draw_engine_match_menu_overlay, used by InputHandler's
+        # click-outside-to-close check so it can't drift from the drawn box
+        # (the previous hardcoded 320x180 mismatched the drawn 320x220 box,
+        # letting clicks in the bottom 40px close the overlay).
+        self.main_menu_overlay_box: pygame.Rect | None = None
+        self.em_menu_overlay_box: pygame.Rect | None = None
         self.confirm_yes_btn: pygame.Rect | None = None
         self.confirm_cancel_btn: pygame.Rect | None = None
         self._last_cursor = pygame.SYSTEM_CURSOR_ARROW
@@ -331,6 +352,14 @@ class App:
             return
         g = self.game
         assert g.adapter is not None
+        # Engine-vs-engine games are intentionally never persisted as
+        # resumable saves (see Game's em_* fields docstring and
+        # _apply_engine_match_move's own "deliberately does not call
+        # write_save" note). Without this guard the crash handler
+        # (_handle_crash) would classify ENGINE_MATCH as 'pvp' below and
+        # clobber the player's real PvP save with engine-match moves.
+        if g.state == GameState.ENGINE_MATCH:
+            return
         mode = 'bot' if g.state == GameState.BOT else 'pvp'
         if mode == 'bot':
             save_io.write_save(mode, list(g.adapter.board.move_stack), g.player_color, g.bot_level)
@@ -403,14 +432,19 @@ class App:
         """Cancel both sides' engine-match workers. Called when quitting
         an in-progress match back to the menu — there's no save to
         write first (see Game's em_* fields docstring), so this is just
-        cleanup, unlike write_save()-then-quit on the PVP/BOT path."""
+        cleanup, unlike write_save()-then-quit on the PVP/BOT path.
+
+        Also stops the two engine-match Stockfish subprocesses so they
+        don't linger (consuming memory) while the user is back at the
+        menu; they're reopened lazily on the next match's first move."""
         g = self.game
         g.em_white_native_worker.cancel()
         g.em_white_native_worker.join(timeout=2.0)
         g.em_black_native_worker.cancel()
         g.em_black_native_worker.join(timeout=2.0)
-        g.em_white_stockfish_worker.cancel()
-        g.em_black_stockfish_worker.cancel()
+        # stop_engine() also cancels + joins the worker's search thread.
+        g.em_white_stockfish_worker.stop_engine()
+        g.em_black_stockfish_worker.stop_engine()
 
     def safe_read_save(self, mode: str):
         """Returns SaveData, or None, or sets pending_corrupt_error and
@@ -572,6 +606,10 @@ class App:
         # Re-convert piece images to the new display's pixel format.
         self.assets = load_images(resource_path)
         self.game.piece_imgs = self.assets.piece_imgs
+        # The new piece images have a different identity (and pixel format),
+        # so force the cached board surface to repaint on the next frame.
+        self._board_surf_dirty = True
+        self._board_surf_signature = None
         self._persist_window_prefs()
 
     def _persist_window_prefs(self) -> None:
@@ -582,6 +620,46 @@ class App:
                                   g.bot_engine_pref, g.bot_elo,
                                   sound_enabled=g.sound_enabled)
 
+    def _shutdown_workers(self) -> None:
+        """Full best-effort shutdown of every background worker, UCI
+        subprocess, and Polyglot book reader. Idempotent — safe to call
+        twice (e.g. from the QUIT handler and again from run()'s finally).
+        Each step is independently guarded so one failure can't prevent
+        the rest from running.
+
+        Before this, app exit cancelled/joined the native search workers
+        but leaked: the BOT-mode Stockfish subprocess (never stop_engine'd),
+        the two engine-match Stockfish subprocesses (only cancel'd, never
+        quit), and all three ChessBots' Polyglot memory-mapped book readers
+        (never closed)."""
+        g = self.game
+        # Native search workers: cancel + join.
+        for worker in (g.bot_worker, g.em_white_native_worker, g.em_black_native_worker):
+            try:
+                worker.cancel()
+                worker.join(timeout=2.0)
+            except Exception:
+                self.logger.exception("Error shutting down native worker")
+        # Stockfish subprocess workers: cancel + join + quit the process.
+        for worker in (g.stockfish_bot_worker, g.em_white_stockfish_worker,
+                       g.em_black_stockfish_worker):
+            try:
+                worker.stop_engine()
+            except Exception:
+                self.logger.exception("Error shutting down Stockfish worker")
+        # Analysis worker (closes its own UCI subprocess).
+        try:
+            self.analysis_worker.stop_engine()
+        except Exception:
+            self.logger.exception("Error shutting down analysis worker")
+        # Close the Polyglot memory-mapped book readers on the three
+        # ChessBot instances (close_book closes without reopening).
+        for bot in (g.bot, g.em_white_bot, g.em_black_bot):
+            try:
+                bot.close_book()
+            except Exception:
+                self.logger.exception("Error closing opening book")
+
     # ── Bootstrap entry point ───────────────────────────────────────────────
 
     def run(self) -> None:
@@ -591,42 +669,47 @@ class App:
                     self._frame()
             except SystemExit:
                 raise
-            except Exception:
-                self._handle_crash()
+            except Exception as exc:
+                self._handle_crash(exc)
         finally:
-            self.game.bot_worker.cancel()
-            self.game.bot_worker.join(timeout=2.0)
-            self.game.em_white_native_worker.cancel()
-            self.game.em_white_native_worker.join(timeout=2.0)
-            self.game.em_black_native_worker.cancel()
-            self.game.em_black_native_worker.join(timeout=2.0)
-            self.game.em_white_stockfish_worker.cancel()
-            self.game.em_black_stockfish_worker.cancel()
-            self.analysis_worker.stop_engine()
+            self._shutdown_workers()
 
-    def _handle_crash(self) -> None:
+    def _handle_crash(self, exc: BaseException) -> None:
         """Last-resort handler for an exception that escaped the frame
         loop. Never lets a *second* unhandled exception replace the
         original one — every step here is best-effort and independently
         guarded, since we have no idea what state the app is in.
 
         Order of operations, each independent of the last succeeding:
-          1. Log the full traceback (the file logger from log.py, not
-             stdout — a --windowed build discards stdout entirely, so
-             that would otherwise be silent data loss for diagnosing
-             the crash).
-          2. Try to save the game one more time. write_save() is already
+          1. Print the full traceback to stderr (CLI debug output) so a
+             developer running the app from a terminal sees the crash
+             immediately, alongside the file logger's own record.
+          2. Log the full traceback (the file logger from log.py) for
+             durable, on-disk diagnostics.
+          3. Try to save the game one more time. write_save() is already
              called after every completed move, so this is a belt-and-
              braces attempt, not the only thing standing between the
              player and a lost game.
-          3. Show a plain-pygame error screen (no render/ module calls —
+          4. Show a plain-pygame error screen (no render/ module calls —
              those are exactly what might have just crashed) so the
              player sees *something* other than the window silently
              disappearing, and knows their progress up to the last move
              is safe on disk.
-          4. Exit with a nonzero status so a wrapping process/launcher
+          5. Exit with a nonzero status so a wrapping process/launcher
              (or a test) can tell this wasn't a normal quit.
         """
+        # Print the crash to the CLI (stderr) for immediate debug visibility.
+        tb_lines = traceback.format_exception(type(exc), exc, exc.__traceback__)
+        sys.stderr.write(
+            "\n===== Python Chess crashed =====\n"
+            + "".join(tb_lines)
+            + "================================\n\n"
+        )
+        try:
+            sys.stderr.flush()
+        except Exception:
+            pass
+
         self.logger.exception("Unhandled exception escaped the main loop")
 
         try:
@@ -695,6 +778,17 @@ class App:
             self.game.think_timer = 0
 
         for event in pygame.event.get():
+            # Refresh the mouse position from the event itself for mouse
+            # events, rather than reusing the frame-start position captured
+            # once above. At 60 fps the frame-start pos can be ~16 ms stale,
+            # so a fast click could otherwise land on the wrong button. Non
+            # -mouse events (keyboard) keep the last known position, which
+            # they only use for hover-style checks. Tests that drive
+            # _handle_event directly already pass a matching (x, y), so this
+            # only changes the real main-loop path for the better.
+            if event.type in (pygame.MOUSEBUTTONDOWN, pygame.MOUSEBUTTONUP,
+                              pygame.MOUSEMOTION):
+                mx, my = event.pos
             self._handle_event(event, mx, my)
 
         self._apply_bot_move()
@@ -776,6 +870,14 @@ class App:
             return
         assert g.adapter is not None
         if g.game_over:
+            return
+        # g.game_over is set during _render_game, which runs *after* this in
+        # the frame loop. Also guard on the adapter's own terminal-state
+        # check so the first frame after a game-ending move doesn't launch a
+        # search on a checkmated/stalemated position (a useless worker that
+        # returns None and is discarded next frame anyway).
+        if g.adapter.is_game_over:
+            g.game_over = True
             return
         is_animating = g.anim is not None and g.anim.is_animating(pygame.time.get_ticks())
         if is_animating or g.review.active:
@@ -882,8 +984,10 @@ class App:
 
     # ── Rendering ────────────────────────────────────────────────────────────
 
-    _history_ply_rects: list = []
-    _live_btn_rect: pygame.Rect | None = None
+    # NOTE: _history_ply_rects / _live_btn_rect used to be class-level
+    # attributes (shared across all App instances until the first render
+    # shadowed them with an instance attribute). They are now initialised
+    # per-instance in __init__ — see the assignment block there.
 
     def _popup_active(self) -> bool:
         """True if any modal popup/overlay is currently on screen.
@@ -1071,13 +1175,25 @@ class App:
                 self.screen, theme.WIN_W, theme.WIN_H, self.fonts
             )
         if g.main_menu_overlay and g.state in (GameState.PVP, GameState.BOT):
-            self.overlay_save_btn, self.overlay_preferences_btn = render_menus.draw_main_menu_overlay(
+            (
+                self.overlay_save_btn, self.overlay_preferences_btn,
+                self.main_menu_overlay_box,
+            ) = render_menus.draw_main_menu_overlay(
                 self.screen, self.fonts, theme.PANEL_X
             )
+        else:
+            # Clear the stale box outside PVP/BOT so a click-outside test
+            # can't match a rect from a previous game/mode.
+            self.main_menu_overlay_box = None
         if g.main_menu_overlay and g.state == GameState.ENGINE_MATCH:
-            self.em_overlay_export_btn, self.em_overlay_quit_btn = render_menus.draw_engine_match_menu_overlay(
+            (
+                self.em_overlay_export_btn, self.em_overlay_quit_btn,
+                self.em_menu_overlay_box,
+            ) = render_menus.draw_engine_match_menu_overlay(
                 self.screen, self.fonts, theme.PANEL_X
             )
+        else:
+            self.em_menu_overlay_box = None
         # Resign/Offer Draw now raise this directly from their persistent
         # row buttons (see App._render_game / InputHandler._handle_game_event)
         # without opening the Game Menu overlay first, so this can't stay
@@ -1133,10 +1249,31 @@ class App:
         render_board.draw_labels(self.screen, g.board_flipped, self.fonts)
 
         kb_cursor_sq = g.kb_cursor_sq if not g.review.active else None
-        render_board.draw_board(
-            self.board_surf, board, g.piece_imgs, g.board_theme, g.board_flipped,
-            check_sq, last_move, sel_sq, targets, suppress, kb_cursor_sq,
+        # P5: only repaint the cached board surface when one of its visual
+        # inputs changed since the last frame (piece placement, theme,
+        # orientation, check/last-move/selection highlights, legal-target
+        # indicators, drag-suppressed square, or the keyboard cursor). The
+        # _board_surf_dirty flag is an additional explicit "force redraw"
+        # signal set by start_game / fullscreen toggle / input handlers.
+        sig = (
+            board.board_fen(),
+            id(g.piece_imgs),
+            g.board_theme,
+            g.board_flipped,
+            check_sq,
+            last_move,
+            sel_sq,
+            frozenset(targets) if targets else None,
+            frozenset(suppress) if suppress else None,
+            kb_cursor_sq,
         )
+        if self._board_surf_dirty or sig != self._board_surf_signature:
+            render_board.draw_board(
+                self.board_surf, board, g.piece_imgs, g.board_theme, g.board_flipped,
+                check_sq, last_move, sel_sq, targets, suppress, kb_cursor_sq,
+            )
+            self._board_surf_signature = sig
+            self._board_surf_dirty = False
 
         is_engine_match = (g.state == GameState.ENGINE_MATCH)
         if is_engine_match:
@@ -1191,9 +1328,14 @@ class App:
             # Add a darkening overlay during the flip for a smoother feel.
             darkness = (1.0 - (scale_x - FLIP_MIN_SCALE) / (1.0 - FLIP_MIN_SCALE)) * 90
             if darkness > 1:
-                veil = pygame.Surface((new_w, board_h), pygame.SRCALPHA)
-                veil.fill((0, 0, 0, int(min(90, darkness))))
-                self.screen.blit(veil, (theme.BOARD_X + offset_x, theme.BOARD_Y))
+                # P3: reuse one pre-allocated veil surface (refilled each
+                # frame) instead of allocating a fresh SRCALPHA surface for
+                # every frame of the ~600 ms flip animation.
+                self._flip_veil_surf.fill((0, 0, 0, int(min(90, darkness))))
+                self.screen.blit(
+                    self._flip_veil_surf, (theme.BOARD_X + offset_x, theme.BOARD_Y),
+                    area=pygame.Rect(0, 0, new_w, board_h),
+                )
             # Suppress the move-slide animation and drag-piece overlay during
             # the flip — their absolute screen coordinates are in the pre-flip
             # orientation and would visually drift as the board scales.

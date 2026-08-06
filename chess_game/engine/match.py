@@ -118,8 +118,27 @@ class _NativePlayer(_EnginePlayer):
         self._spec = spec
         self._bot = ChessBot(max_depth=spec.difficulty, book_path=spec.book_path)
         self._move_times: list[float] = []
+        # Tracks a search thread abandoned on a previous pick_move() timeout.
+        # Re-joined (best-effort) at the start of the next pick_move() so the
+        # old thread can't keep racing on the shared _tt/_history while a new
+        # search runs concurrently on the same ChessBot.
+        self._abandoned_thread: threading.Thread | None = None
 
     def pick_move(self, board: chess.Board, timeout_s: float) -> chess.Move | None:
+        # If a previous move's search timed out and was abandoned, give it a
+        # short grace period to finish before starting a new one on the same
+        # ChessBot — this bounds the window during which two threads mutate
+        # the shared transposition/history tables at once.
+        if self._abandoned_thread is not None:
+            self._abandoned_thread.join(timeout=0.5)
+            if self._abandoned_thread.is_alive():
+                _LOGGER.warning(
+                    "Native engine (%s) abandoned thread still running; "
+                    "starting a new search that may briefly share state.",
+                    self._spec.display_name(),
+                )
+            self._abandoned_thread = None
+
         abort = threading.Event()
         result: dict[str, chess.Move | None] = {"move": None}
         # Never hand the live, shared board to a background thread: the
@@ -157,6 +176,7 @@ class _NativePlayer(_EnginePlayer):
             # stockfish_bot_worker.py's cancel() docstring for the same
             # "cancel means stale, not literally killed" contract).
             abort.set()
+            self._abandoned_thread = thread
             _LOGGER.warning(
                 "Native engine (%s) exceeded per-move timeout %.1fs — forfeiting move",
                 self._spec.display_name(), timeout_s,
@@ -237,7 +257,11 @@ class _StockfishPlayer(_EnginePlayer):
         if self._engine is not None:
             try:
                 self._engine.quit()
-            except chess.engine.EngineError:
+            except (chess.engine.EngineError, OSError):
+                # OSError (e.g. broken pipe) is raised if the Stockfish
+                # process already died; it isn't an EngineError subclass,
+                # so it must be caught separately to avoid propagating out
+                # of a finally-block close().
                 pass
             self._engine = None
 

@@ -72,10 +72,11 @@ class SoundManager:
         .ogg assets exist in data/sounds/ (only move.ogg and capture.ogg) —
         adding new asset files wasn't authorized by the remediation brief
         ("no new runtime dependencies... flag and ask first"), so this
-        approximates the cue with a double-strike of the existing capture
-        sound for game-ending moves and check, which is audibly distinct
-        from a single move/capture without requiring new assets. Replace
-        with dedicated check.ogg/checkmate.ogg/draw.ogg assets when available.
+        approximates the cue by playing the existing capture sound once
+        for game-ending moves and for check, which is still audibly
+        distinct from a plain quiet move. Replace with dedicated
+        check.ogg/checkmate.ogg/draw.ogg assets (and, if desired, a true
+        double-strike via a queued channel) when available.
         """
         if is_game_over:
             self.play('capture')

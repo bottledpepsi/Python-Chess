@@ -15,6 +15,7 @@ import os
 import tempfile
 from dataclasses import dataclass, field
 from datetime import date, datetime
+from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -50,6 +51,12 @@ _LEGACY_PREF_FILENAME = "python-chess_preferences.txt"
 # by this app.
 PGN_SUBDIR = "pgn"
 
+# Upper bound on the number of moves accepted when validating a save file.
+# A real game essentially never exceeds a few thousand plies; capping here
+# prevents a maliciously huge save from driving an unbounded replay loop
+# (every move is pushed onto a fresh board) before any move is rejected.
+MAX_SAVE_MOVES = 1000
+
 
 class CorruptSaveError(Exception):
     """Raised when a save file exists but cannot be parsed/validated."""
@@ -75,11 +82,17 @@ class SaveData:
     active_side: str | None = None
 
 
+@lru_cache(maxsize=1)
 def get_save_dir() -> Path:
     """Return (creating if needed) the per-user save directory.
 
     Uses platformdirs.user_data_dir, which on POSIX creates the directory
     with 0700 permissions — fixing the world-readable /tmp issue for free.
+
+    Memoized: the directory location never moves during a process lifetime,
+    and platformdirs.user_data_dir / mkdir / chmod are syscalls that
+    render/menus.draw_preferences used to incur every frame while the
+    Preferences screen was open.
     """
     path = Path(platformdirs.user_data_dir("python-chess", appauthor=False))
     path.mkdir(parents=True, exist_ok=True)
@@ -96,6 +109,12 @@ def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(payload, f)
+            # Flush + fsync before the atomic replace so a crash between
+            # writing and the rename can't leave a truncated file in place
+            # of the previous good save. fsync durability is best-effort on
+            # some filesystems but is the standard pattern here.
+            f.flush()
+            os.fsync(f.fileno())
         os.replace(tmp_name, path)
     except Exception:
         try:
@@ -175,7 +194,10 @@ def read_preferences() -> dict[str, Any]:
             }
             logger.info("Preferences loaded <- %s | %s", path, prefs)
             return prefs
-        except (OSError, json.JSONDecodeError, AttributeError):
+        except (OSError, json.JSONDecodeError, AttributeError, ValueError, TypeError):
+            # ValueError/TypeError cover a corrupt scalar such as
+            # ``"bot_elo": "not_a_number"`` (int() raises ValueError) or a
+            # payload that isn't a JSON object (bool() on a list etc.).
             logger.exception("Failed to load preferences from %s", path)
             return {}
 
@@ -302,6 +324,10 @@ def export_pgn(
 def _validate_moves(raw_moves: list[str]) -> list[chess.Move]:
     """Replay UCI moves against a fresh board, raising CorruptSaveError on
     any parse failure or illegal move — never silently truncate."""
+    if len(raw_moves) > MAX_SAVE_MOVES:
+        raise CorruptSaveError(
+            f"Save file has {len(raw_moves)} moves, exceeding the {MAX_SAVE_MOVES} limit"
+        )
     board = chess.Board()
     moves: list[chess.Move] = []
     for uci in raw_moves:

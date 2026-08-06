@@ -12,12 +12,21 @@ from dataclasses import dataclass, field
 import chess
 import pygame
 
+from chess_game.log import get_logger
 from chess_game.theme import PIECE_SIZE
 
 _PIECE_NAMES = {
     chess.PAWN: 'pawn', chess.KNIGHT: 'knight',
     chess.BISHOP: 'bishop', chess.ROOK: 'rook',
     chess.QUEEN: 'queen', chess.KING: 'king',
+}
+
+# Standard one-letter glyphs used on the placeholder surface when a real
+# piece PNG can't be loaded (so a missing asset degrades to a labelled
+# square rather than crashing a windowed build with no visible error).
+_PLACEHOLDER_LETTER = {
+    'pawn': 'P', 'knight': 'N', 'bishop': 'B',
+    'rook': 'R', 'queen': 'Q', 'king': 'K',
 }
 
 
@@ -32,13 +41,41 @@ class Assets:
 
 def load_images(resource_path_fn: Callable[[str], str]) -> Assets:
     """Load and scale every piece image used across the board, trays,
-    promotion picker, and color-picker screens."""
+    promotion picker, and color-picker screens.
+
+    A missing or unreadable PNG degrades to a labelled placeholder surface
+    (solid square + piece letter + red border) rather than raising, so a
+    PyInstaller bundling failure in a --windowed build surfaces as visibly
+    wrong pieces instead of the app silently disappearing on startup.
+    """
+    logger = get_logger()
+
+    def _placeholder(name: str, color_char: str, size: int) -> pygame.Surface:
+        surf = pygame.Surface((size, size), pygame.SRCALPHA)
+        is_white = color_char == 'w'
+        bg = (235, 235, 230) if is_white else (45, 45, 45)
+        fg = (30, 30, 30) if is_white else (235, 235, 235)
+        surf.fill(bg)
+        letter = _PLACEHOLDER_LETTER.get(name, '?')
+        try:
+            font = pygame.font.Font(None, max(8, int(size * 0.8)))
+            text = font.render(letter, True, fg)
+            surf.blit(text, text.get_rect(center=surf.get_rect().center))
+        except pygame.error:
+            pass  # font unavailable; the red border still signals the fallback
+        pygame.draw.rect(surf, (200, 50, 50), surf.get_rect(), 2)
+        return surf
 
     def _load(name: str, color_char: str, size: int) -> pygame.Surface:
-        img = pygame.image.load(
-            resource_path_fn('data/imgs/' + color_char + '_' + name + '.png')
-        ).convert_alpha()
-        return pygame.transform.smoothscale(img, (size, size))
+        path = resource_path_fn('data/imgs/' + color_char + '_' + name + '.png')
+        try:
+            img = pygame.image.load(path).convert_alpha()
+            return pygame.transform.smoothscale(img, (size, size))
+        except (pygame.error, FileNotFoundError):
+            logger.exception(
+                "Could not load piece image %r at %s; using a placeholder.", name, path
+            )
+            return _placeholder(name, color_char, size)
 
     assets = Assets()
     for ct, pchar in ((chess.WHITE, 'w'), (chess.BLACK, 'b')):

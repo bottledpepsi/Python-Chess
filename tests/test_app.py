@@ -741,21 +741,28 @@ def test_quit_event_cancels_native_bot_worker_and_stops_analysis_engine(app, mon
     assert "pygame_quit" in calls
 
 
-def test_quit_event_does_not_stop_stockfish_bot_worker(app, monkeypatch):
-    """Documents a known gap rather than papering over it: the QUIT
-    handler currently shuts down the native bot_worker and the analysis
-    engine, but never cancels or stops game.stockfish_bot_worker (the
-    engine used to actually play bot moves when "Vs Bot" is set to
-    Stockfish). If a Stockfish search is in flight when the window is
-    closed, that subprocess is not cleanly terminated here.
+def test_quit_event_stops_stockfish_bot_worker(app, monkeypatch):
+    """The QUIT handler must cleanly shut down game.stockfish_bot_worker
+    (the engine used to actually play bot moves when "Vs Bot" is set to
+    Stockfish), along with every other worker/subprocess/book, via the
+    central App._shutdown_workers().
 
-    This test asserts the *current* behaviour so a future fix is a
-    deliberate, visible change to this test rather than a silent one —
-    it is not an endorsement of leaving the subprocess unterminated.
+    Previously this was a known gap (the QUIT handler cancelled the native
+    bot_worker and the analysis engine but left the Stockfish subprocess
+    unterminated). This test now asserts the fixed cleanup so a future
+    regression that drops the Stockfish shutdown again is caught here.
     """
     calls = []
     monkeypatch.setattr(app.game.bot_worker, "cancel", lambda: None)
     monkeypatch.setattr(app.game.bot_worker, "join", lambda timeout=None: None)
+    # The em_* native workers are real here (idle, so cancel/join are cheap);
+    # the em_* stockfish workers' real stop_engine() is a no-op on a never-
+    # opened engine. Only the BOT-mode stockfish_bot_worker is spied on, to
+    # keep this test focused on the gap it documents.
+    monkeypatch.setattr(app.game.em_white_native_worker, "cancel", lambda: None)
+    monkeypatch.setattr(app.game.em_white_native_worker, "join", lambda timeout=None: None)
+    monkeypatch.setattr(app.game.em_black_native_worker, "cancel", lambda: None)
+    monkeypatch.setattr(app.game.em_black_native_worker, "join", lambda timeout=None: None)
     monkeypatch.setattr(app.analysis_worker, "stop_engine", lambda: None)
     monkeypatch.setattr(
         app.game.stockfish_bot_worker, "cancel", lambda: calls.append("sf_cancel")
@@ -763,16 +770,21 @@ def test_quit_event_does_not_stop_stockfish_bot_worker(app, monkeypatch):
     monkeypatch.setattr(
         app.game.stockfish_bot_worker, "stop_engine", lambda: calls.append("sf_stop")
     )
+    # Closing the Polyglot book readers on the three ChessBot instances is
+    # part of shutdown too; stub close_book so the real mmap isn't touched
+    # mid-test (the bots are shared fixtures and a real close is harmless
+    # but unnecessary to exercise here).
+    for bot in (app.game.bot, app.game.em_white_bot, app.game.em_black_bot):
+        monkeypatch.setattr(bot, "close_book", lambda: None)
     monkeypatch.setattr(pygame, "quit", lambda: None)
     monkeypatch.setattr("sys.exit", lambda *a: (_ for _ in ()).throw(SystemExit))
 
     with pytest.raises(SystemExit):
         app._handle_event(pygame.event.Event(pygame.QUIT), 0, 0)
 
-    assert calls == [], (
-        "stockfish_bot_worker.cancel()/stop_engine() were called on QUIT — "
-        "if this now passes with calls made, update this test to assert "
-        "the (now fixed) cleanup instead of its absence."
+    assert "sf_stop" in calls, (
+        "stockfish_bot_worker.stop_engine() was not called on QUIT — the "
+        "central shutdown must stop the BOT-mode Stockfish subprocess."
     )
 
 

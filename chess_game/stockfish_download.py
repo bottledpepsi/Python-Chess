@@ -119,12 +119,14 @@ def _fetch_expected_digest(asset_name: str) -> str | None:
         with urllib.request.urlopen(request, timeout=_API_TIMEOUT_S) as response:
             payload = json.load(response)
     except Exception as exc:
-        # Deliberately broad: this is a best-effort integrity check, not
-        # the download itself, and must never let an unexpected failure
-        # mode here (network error, malformed JSON, an unusual response
-        # object, ...) escalate into failing the whole download. Any
-        # failure just means "can't verify this time" - see
-        # _verify_digest's fallback behaviour when this returns None.
+        # Deliberately broad: this is a best-effort integrity check that runs
+        # in a background thread, not the download itself, and must never let
+        # an unexpected failure mode here (network error, malformed JSON, an
+        # unusual response object, a mock that doesn't conform to the file-
+        # like protocol, ...) escalate into failing the whole download or
+        # killing the thread silently. Any failure just means "can't verify
+        # this time" - see _verify_digest's fallback behaviour when this
+        # returns None.
         logger.warning("Could not reach GitHub API for release digests: %s", exc)
         return None
 
@@ -206,7 +208,9 @@ def _is_within_directory(dest_dir: Path, member_path: Path) -> bool:
 def _extract_archive(archive_path: Path, dest_dir: Path) -> None:
     """Extract a .zip or .tar archive safely.
 
-    Raise if any archive member would write outside dest_dir.
+    Raise if any archive member would write outside dest_dir. Symlinks,
+    hardlinks and device/special files are never extracted (matching
+    tarfile's ``filter="data"`` on Python 3.12+).
     """
     dest_dir = dest_dir.resolve()
 
@@ -224,16 +228,25 @@ def _extract_archive(archive_path: Path, dest_dir: Path) -> None:
         # validation below covers 3.10/3.11 too, since pyproject.toml
         # pins requires-python = ">=3.10".
         with tarfile.open(archive_path) as tf:
-            for tar_member in tf.getmembers():
+            members = tf.getmembers()
+            for tar_member in members:
                 member_path = (dest_dir / tar_member.name).resolve()
                 if not _is_within_directory(dest_dir, member_path):
                     raise ValueError(f"Unsafe path in archive: {tar_member.name}")
             try:
                 tf.extractall(dest_dir, filter="data")
             except TypeError:
-                # Python < 3.12 doesn't have the `filter` kwarg; the
-                # manual check above already covers the same risk.
-                tf.extractall(dest_dir)
+                # Python < 3.12 doesn't have the `filter` kwarg. The manual
+                # _is_within_directory check above covers path traversal,
+                # but it does NOT strip symlinks/hardlinks/devices the way
+                # filter="data" does — a symlink whose name is inside
+                # dest_dir but whose target escapes it would still be
+                # written. Filter those out explicitly before extracting.
+                safe_members = [
+                    m for m in members
+                    if not (m.issym() or m.islnk() or m.isdev())
+                ]
+                tf.extractall(dest_dir, members=safe_members)
 
 
 def _find_extracted_binary(search_root: Path) -> Path | None:
@@ -330,6 +343,14 @@ class StockfishDownloader:
         archive_path: Path | None = None
         try:
             asset_name, url = _asset_url_for_current_platform()
+            if install_dir.exists() and not install_dir.is_dir():
+                # mkdir(exist_ok=True) only suppresses FileExistsError when
+                # the path *is* a directory; a stray file at this path would
+                # otherwise surface as a confusing "[Errno 17] File exists".
+                raise OSError(
+                    f"Cannot create directory {install_dir}: a non-directory file "
+                    f"already exists at that path. Remove it and retry."
+                )
             install_dir.mkdir(parents=True, exist_ok=True)
             archive_path = install_dir / asset_name
 

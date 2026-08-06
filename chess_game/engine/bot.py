@@ -235,7 +235,11 @@ def _alphabeta(board, depth, alpha, beta, maximising, bot_color,
     orig_alpha = alpha
 
     # ── TT lookup ─────────────────────────────────────────────────────────────
-    key      = board._transposition_key()
+    # Use the public, stable polyglot Zobrist hash as the transposition key
+    # (piece placement + side to move + castling rights + en passant file)
+    # rather than python-chess's private ``_transposition_key``, which has no
+    # stability guarantee across library versions.
+    key      = chess.polyglot.zobrist_hash(board)
     tt_move  = None
     tt_entry = tt.get(key)
     if tt_entry is not None:
@@ -315,24 +319,33 @@ def _alphabeta(board, depth, alpha, beta, maximising, bot_color,
                 not maximising, bot_color, killers, tt, history, abort=abort
             )
         else:
+            # Principal Variation Search: scout with a null window
+            # (alpha + 1 / beta - 1) and only re-search with the full window
+            # if the scout failed high (maximiser) / low (minimiser). Using
+            # the standard ``alpha + 1`` / ``beta - 1`` (rather than the
+            # ``min(beta, alpha + 1)`` / ``max(alpha, beta - 1)`` this code
+            # used previously) ensures the null window never collapses onto
+            # the bound itself when ``beta - alpha <= 1``, which would make
+            # the re-search condition unsatisfiable and silently skip
+            # warranted re-searches.
             if maximising:
                 score, _ = _alphabeta(
-                    board, depth - 1, alpha, min(beta, alpha + 1),
+                    board, depth - 1, alpha, alpha + 1,
                     not maximising, bot_color, killers, tt, history, abort=abort
                 )
                 if score > alpha and score < beta:
                     score, _ = _alphabeta(
-                        board, depth - 1, score, beta,
+                        board, depth - 1, alpha, beta,
                         not maximising, bot_color, killers, tt, history, abort=abort
                     )
             else:
                 score, _ = _alphabeta(
-                    board, depth - 1, max(alpha, beta - 1), beta,
+                    board, depth - 1, beta - 1, beta,
                     not maximising, bot_color, killers, tt, history, abort=abort
                 )
                 if score > alpha and score < beta:
                     score, _ = _alphabeta(
-                        board, depth - 1, alpha, score,
+                        board, depth - 1, alpha, beta,
                         not maximising, bot_color, killers, tt, history, abort=abort
                     )
         board.pop()
@@ -374,7 +387,7 @@ def _alphabeta(board, depth, alpha, beta, maximising, bot_color,
 def _rank_all_moves(board, depth, bot_color, killers, tt, history, abort=None):
     """Rank all root moves independently for top-N scoring."""
     scored = []
-    key = board._transposition_key()
+    key = chess.polyglot.zobrist_hash(board)
     tt_entry = tt.get(key)
     tt_move = tt_entry[3] if tt_entry is not None else None
     moves = _order_moves(
@@ -531,6 +544,21 @@ class ChessBot:
         self._tt.clear()
         self._history.clear()
         self._reset_book()
+
+    def close_book(self):
+        """Close the Polyglot book reader and release its memory-mapped file
+        handle, for good (no reopen). Intended for app shutdown only —
+        unlike clear_tt()/_reset_book(), which close-and-reopen the book to
+        reset it for a new game. Idempotent; safe to call even if the book
+        was never opened or has already been closed."""
+        if self._book_reader is not None:
+            try:
+                self._book_reader.close()
+            except OSError:
+                _LOGGER.exception('Failed to close book reader')
+            self._book_reader = None
+        self._book_active = False
+        self._book_in_use = False
 
     def get_move(self, board, color, difficulty_level: int = 10, abort=None,
                  min_think_time_s: float = 1.0):

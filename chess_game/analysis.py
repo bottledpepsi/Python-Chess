@@ -55,6 +55,11 @@ class AnalysisWorker:
         self.engine_available = True
         self.missing_reason: str = ""
         self._tried_open = False
+        # Serialises engine open/quit so stop_engine() can't quit() a
+        # subprocess while _ensure_engine() is mid-handshake on another
+        # thread (mirrors StockfishBotWorker's own _engine_lock). The
+        # long-running analysis() call itself is not held under the lock.
+        self._engine_lock = threading.Lock()
 
         self._thread: threading.Thread | None = None
         self._cancel = threading.Event()
@@ -81,43 +86,44 @@ class AnalysisWorker:
 
         Avoid repeated subprocess spawn attempts for a missing engine path.
         """
-        if self._engine is not None:
+        with self._engine_lock:
+            if self._engine is not None:
+                return True
+            if self._tried_open and not self.engine_available:
+                return False
+            self._tried_open = True
+            logger = get_logger()
+            try:
+                self._engine = _popen_uci(self._engine_path)
+            except TimeoutError as exc:
+                # TimeoutError is a subclass of OSError in Python 3.10+, so
+                # it must be caught before OSError. This happens when the
+                # executable never responds to a UCI handshake.
+                self.engine_available = False
+                self.missing_reason = (
+                    f"Timed out waiting for a UCI response from '{self._engine_path}' "
+                    "(is this actually a chess engine?)"
+                )
+                logger.warning("Stockfish handshake timed out (%s): %s", self._engine_path, exc)
+                return False
+            except OSError as exc:
+                # Covers FileNotFoundError (binary not on PATH / bad path) and
+                # PermissionError (path exists but isn't executable) — there is
+                # no dedicated "engine not found" exception type to catch here.
+                self.engine_available = False
+                self.missing_reason = str(exc) or f"Could not launch '{self._engine_path}'"
+                logger.warning("Stockfish unavailable (%s): %s", self._engine_path, exc)
+                return False
+            except chess.engine.EngineError as exc:
+                # The process launched but errored out during the UCI
+                # handshake (e.g. it does speak UCI but rejected something).
+                self.engine_available = False
+                self.missing_reason = str(exc) or f"'{self._engine_path}' did not initialise correctly"
+                logger.warning("Stockfish did not initialise (%s): %s", self._engine_path, exc)
+                return False
+            self.engine_available = True
+            self.missing_reason = ""
             return True
-        if self._tried_open and not self.engine_available:
-            return False
-        self._tried_open = True
-        logger = get_logger()
-        try:
-            self._engine = _popen_uci(self._engine_path)
-        except TimeoutError as exc:
-            # TimeoutError is a subclass of OSError in Python 3.10+, so
-            # it must be caught before OSError. This happens when the
-            # executable never responds to a UCI handshake.
-            self.engine_available = False
-            self.missing_reason = (
-                f"Timed out waiting for a UCI response from '{self._engine_path}' "
-                "(is this actually a chess engine?)"
-            )
-            logger.warning("Stockfish handshake timed out (%s): %s", self._engine_path, exc)
-            return False
-        except OSError as exc:
-            # Covers FileNotFoundError (binary not on PATH / bad path) and
-            # PermissionError (path exists but isn't executable) — there is
-            # no dedicated "engine not found" exception type to catch here.
-            self.engine_available = False
-            self.missing_reason = str(exc) or f"Could not launch '{self._engine_path}'"
-            logger.warning("Stockfish unavailable (%s): %s", self._engine_path, exc)
-            return False
-        except chess.engine.EngineError as exc:
-            # The process launched but errored out during the UCI
-            # handshake (e.g. it does speak UCI but rejected something).
-            self.engine_available = False
-            self.missing_reason = str(exc) or f"'{self._engine_path}' did not initialise correctly"
-            logger.warning("Stockfish did not initialise (%s): %s", self._engine_path, exc)
-            return False
-        self.engine_available = True
-        self.missing_reason = ""
-        return True
 
     def start(self, board: chess.Board, depth: int = DEFAULT_DEPTH) -> int:
         """Cancel any in-flight analysis, then start a new one.
@@ -128,8 +134,17 @@ class AnalysisWorker:
         callers can store it uniformly) but never produces a result.
         """
         logger = get_logger()
+        prior_thread = self._thread
         self.cancel()
         self.join(timeout=2.0)
+        if prior_thread is not None and prior_thread.is_alive():
+            # The watcher thread calls analysis.stop() to unblock .next(),
+            # so a search should wind down promptly. If it hasn't, the stale
+            # result is discarded by the epoch guard; surface the orphan.
+            logger.warning(
+                "Prior analysis did not finish within the 2s join timeout; "
+                "discarding its result (epoch guard)."
+            )
 
         self._epoch += 1
         epoch = self._epoch
@@ -150,6 +165,8 @@ class AnalysisWorker:
                 with engine.analysis(board_copy, chess.engine.Limit(depth=depth)) as analysis:
                     # .next() blocks until engine info arrives, so a watcher
                     # thread aborts the search by calling analysis.stop().
+                    done = threading.Event()
+
                     def _watch_cancel() -> None:
                         # Exit promptly when either cancel or done fires.
                         while not cancel_event.is_set() and not done.is_set():
@@ -157,7 +174,6 @@ class AnalysisWorker:
                         if cancel_event.is_set():
                             analysis.stop()
 
-                    done = threading.Event()
                     watcher = threading.Thread(target=_watch_cancel, daemon=True)
                     watcher.start()
 
@@ -179,6 +195,14 @@ class AnalysisWorker:
                     return
             except chess.engine.EngineTerminatedError:
                 logger.warning("Stockfish process terminated during analysis")
+                with self._lock:
+                    self._thinking = False
+                return
+            except chess.engine.EngineError as exc:
+                # A non-terminating protocol/position error would otherwise
+                # kill this daemon thread silently, leaving _thinking True
+                # and the eval bar stuck forever. Surface it and stand down.
+                logger.warning("Analysis engine error (epoch %d): %s", epoch, exc)
                 with self._lock:
                     self._thinking = False
                 return
@@ -237,12 +261,14 @@ class AnalysisWorker:
         if the engine was never successfully opened."""
         self.cancel()
         self.join(timeout=2.0)
-        if self._engine is not None:
-            try:
-                self._engine.quit()
-            except chess.engine.EngineError:
-                pass
-            self._engine = None
-        # Allow a fresh popen_uci attempt next time analysis is enabled
-        # (e.g. after the user fixes the path in preferences).
-        self._tried_open = False
+        with self._engine_lock:
+            if self._engine is not None:
+                try:
+                    self._engine.quit()
+                except (chess.engine.EngineError, OSError):
+                    # OSError covers a broken pipe if the process already died.
+                    pass
+                self._engine = None
+            # Allow a fresh popen_uci attempt next time analysis is enabled
+            # (e.g. after the user fixes the path in preferences).
+            self._tried_open = False

@@ -43,13 +43,24 @@ def _truncate_text_front(text, font, max_width):
     if font.size(text)[0] <= max_width:
         return text
     ellipsis = '\u2026'
-    # Binary-search-free linear shrink is fine here: this runs at most a
-    # few dozen iterations on a short string, once per frame the
-    # preferences screen is open, not in a hot path.
-    for start in range(1, len(text)):
-        candidate = ellipsis + text[start:]
-        if font.size(candidate)[0] <= max_width:
-            return candidate
+    # Binary search for the smallest start index where ellipsis + text[start:]
+    # fits. Because the candidate only gets shorter (and thus narrower) as
+    # start grows, "fits" is monotonic in start, so a binary search converges
+    # in ~log2(len(text)) font.size() calls instead of a linear scan of up to
+    # len(text) calls per frame on the Preferences screen.
+    n = len(text)
+    lo, hi = 1, n
+    best = n  # fallback: ellipsis alone (text[n:] == '')
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        if font.size(ellipsis + text[mid:])[0] <= max_width:
+            best = mid
+            hi = mid - 1
+        else:
+            lo = mid + 1
+    candidate = ellipsis + text[best:]
+    if font.size(candidate)[0] <= max_width:
+        return candidate
     return ellipsis
 
 
@@ -935,7 +946,7 @@ def draw_main_menu_overlay(screen, fonts, panel_x):
         l_s = font.render(label, True, MENU_TEXT)
         screen.blit(l_s, l_s.get_rect(center=btn.center))
 
-    return save_btn, preferences_btn
+    return save_btn, preferences_btn, box
 
 
 def draw_engine_match_menu_overlay(screen, fonts, panel_x):
@@ -990,4 +1001,4 @@ def draw_engine_match_menu_overlay(screen, fonts, panel_x):
         l_s = fonts.ov_btn_sm.render(label, True, MENU_TEXT)
         screen.blit(l_s, l_s.get_rect(center=btn.center))
 
-    return export_btn, quit_btn
+    return export_btn, quit_btn, box

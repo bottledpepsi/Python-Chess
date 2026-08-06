@@ -256,15 +256,11 @@ class InputHandler:
         g = app.game
 
         if event.type == pygame.QUIT:
-            app.game.bot_worker.cancel()
-            app.game.bot_worker.join(timeout=2.0)
-            app.game.em_white_native_worker.cancel()
-            app.game.em_white_native_worker.join(timeout=2.0)
-            app.game.em_black_native_worker.cancel()
-            app.game.em_black_native_worker.join(timeout=2.0)
-            app.game.em_white_stockfish_worker.cancel()
-            app.game.em_black_stockfish_worker.cancel()
-            app.analysis_worker.stop_engine()
+            # Central shutdown: cancels/joins every worker, quits every UCI
+            # subprocess, and closes every Polyglot book reader. Idempotent,
+            # so run()'s finally block calling _shutdown_workers() again on
+            # the way out is harmless.
+            app._shutdown_workers()
             pygame.quit()
             sys.exit()
 
@@ -470,11 +466,15 @@ class InputHandler:
                 app.pref_focus.clear()
                 g.state = GameState.PREFERENCES
             else:
-                bw_chk, bh_chk = 320, 180
-                box_r = pygame.Rect(
-                    theme.PANEL_X // 2 - bw_chk // 2, theme.WIN_H // 2 - bh_chk // 2,
-                    bw_chk, bh_chk,
-                )
+                # Click-outside-to-close: use the exact box rect the renderer
+                # drew (stored on App each frame) rather than a hardcoded
+                # 320x180 that mismatched the drawn 320x220 box and let
+                # clicks in the bottom 40px close the overlay by mistake.
+                box_r = app.main_menu_overlay_box
+                if box_r is None:
+                    box_r = pygame.Rect(
+                        theme.PANEL_X // 2 - 160, theme.WIN_H // 2 - 110, 320, 220
+                    )
                 if not box_r.collidepoint(mx, my):
                     g.main_menu_overlay = False
 
@@ -500,11 +500,13 @@ class InputHandler:
                 g.main_menu_overlay = False
                 g.state = GameState.MENU
             else:
-                bw_chk, bh_chk = 320, 180
-                box_r = pygame.Rect(
-                    theme.PANEL_X // 2 - bw_chk // 2, theme.WIN_H // 2 - bh_chk // 2,
-                    bw_chk, bh_chk,
-                )
+                # See _handle_main_menu_overlay_event: use the drawn box rect
+                # rather than a hardcoded size that can drift from it.
+                box_r = app.em_menu_overlay_box
+                if box_r is None:
+                    box_r = pygame.Rect(
+                        theme.PANEL_X // 2 - 160, theme.WIN_H // 2 - 110, 320, 220
+                    )
                 if not box_r.collidepoint(mx, my):
                     g.main_menu_overlay = False
 

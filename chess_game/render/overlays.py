@@ -27,11 +27,32 @@ from chess_game.theme import (
 )
 
 PROMO_OPTIONS = [
-    ('Queen', chess.QUEEN, 'queen'),
-    ('Rook', chess.ROOK, 'rook'),
-    ('Bishop', chess.BISHOP, 'bishop'),
-    ('Knight', chess.KNIGHT, 'knight'),
+    ('Queen', chess.QUEEN, 'queen', 'Q'),
+    ('Rook', chess.ROOK, 'rook', 'R'),
+    ('Bishop', chess.BISHOP, 'bishop', 'B'),
+    ('Knight', chess.KNIGHT, 'knight', 'N'),
 ]
+
+
+def _wrap_text(text: str, font, max_width: int) -> list[str]:
+    """Greedy word-wrap of ``text`` to fit within ``max_width`` (in px) using
+    ``font.size`` to measure. Returns the list of wrapped lines (never empty
+    for non-empty input). Shared by the info/confirm/error modals so the
+    same wrap logic isn't copy-pasted across each one."""
+    words = text.split(' ')
+    lines: list[str] = []
+    cur = ''
+    for w in words:
+        trial = (cur + ' ' + w).strip()
+        if font.size(trial)[0] > max_width:
+            if cur:
+                lines.append(cur)
+            cur = w
+        else:
+            cur = trial
+    if cur:
+        lines.append(cur)
+    return lines
 
 
 def draw_promotion_overlay(screen, board_x, board_y, turn_color, fonts,
@@ -53,9 +74,10 @@ def draw_promotion_overlay(screen, board_x, board_y, turn_color, fonts,
     box_x = board_x + (BOARD_PX - box_w) // 2
     box_y = board_y + (BOARD_PX - box_h) // 2
     lbl_h = 18
+    hint_h = 14  # room for the "Q / R / B / N" keyboard hint below the icons
 
     panel = pygame.Rect(box_x - 2 - board_x, box_y - lbl_h - 6 - board_y,
-                         box_w + 4, box_h + lbl_h + 10)
+                         box_w + 4, box_h + lbl_h + hint_h + 12)
     pygame.draw.rect(overlay, PROMO_BG_C, panel, border_radius=10)
     pygame.draw.rect(overlay, PROMO_BRD, panel, 1, border_radius=10)
     title = fonts.label.render('PROMOTE TO', True, (140, 140, 140))
@@ -64,7 +86,7 @@ def draw_promotion_overlay(screen, board_x, board_y, turn_color, fonts,
 
     mx, my = pygame.mouse.get_pos()
     rects = []
-    for i, (label, pt, pname) in enumerate(PROMO_OPTIONS):
+    for i, (label, pt, pname, key) in enumerate(PROMO_OPTIONS):
         ix = box_x + pad + i * (icon + gap)
         iy = box_y + pad
         rect = pygame.Rect(ix - 3, iy - 3, icon + 6, icon + 6)
@@ -86,6 +108,12 @@ def draw_promotion_overlay(screen, board_x, board_y, turn_color, fonts,
         if img:
             img_rect = img.get_rect(center=rect.center)
             overlay.blit(img, img_rect.move(-board_x, -board_y))
+        # Keyboard hint: draw the piece's hotkey letter centred under the
+        # icon so a keyboard-only user can see Q/R/B/N are available (the
+        # keys are handled in InputHandler._handle_game_event).
+        key_s = fonts.label.render(key, True, (150, 150, 150))
+        overlay.blit(key_s, key_s.get_rect(
+            centerx=rect.centerx - board_x, top=rect.bottom + 2 - board_y))
         rects.append((rect, pt))
 
     screen.blit(overlay, (board_x, board_y))
@@ -206,17 +234,7 @@ def draw_info_modal(screen, win_w, win_h, title_text, message, fonts):
     title = fonts.ov_title.render(title_text, True, (220, 220, 220))
     screen.blit(title, title.get_rect(center=(box.centerx, box.y + 34)))
 
-    words = message.split(' ')
-    lines, cur = [], ''
-    for w in words:
-        trial = (cur + ' ' + w).strip()
-        if fonts.ov_sub.size(trial)[0] > box_w - 40:
-            lines.append(cur)
-            cur = w
-        else:
-            cur = trial
-    if cur:
-        lines.append(cur)
+    lines = _wrap_text(message, fonts.ov_sub, box_w - 40)
     for i, line in enumerate(lines[:3]):
         ls = fonts.ov_sub.render(line, True, (180, 180, 180))
         screen.blit(ls, ls.get_rect(center=(box.centerx, box.y + 70 + i * 18)))
@@ -252,17 +270,7 @@ def draw_confirm_modal(screen, win_w, win_h, message, fonts, confirm_label='Yes'
     title = fonts.ov_title.render('Are you sure?', True, (230, 220, 210))
     screen.blit(title, title.get_rect(center=(box.centerx, box.y + 34)))
 
-    words = message.split(' ')
-    lines, cur = [], ''
-    for w in words:
-        trial = (cur + ' ' + w).strip()
-        if fonts.ov_sub.size(trial)[0] > box_w - 40:
-            lines.append(cur)
-            cur = w
-        else:
-            cur = trial
-    if cur:
-        lines.append(cur)
+    lines = _wrap_text(message, fonts.ov_sub, box_w - 40)
     for i, line in enumerate(lines[:3]):
         ls = fonts.ov_sub.render(line, True, (190, 180, 175))
         screen.blit(ls, ls.get_rect(center=(box.centerx, box.y + 68 + i * 18)))
@@ -301,17 +309,7 @@ def draw_error_modal(screen, win_w, win_h, message, fonts):
     title = fonts.ov_title.render('Could not load save', True, (235, 200, 200))
     screen.blit(title, title.get_rect(center=(box.centerx, box.y + 34)))
 
-    words = message.split(' ')
-    lines, cur = [], ''
-    for w in words:
-        trial = (cur + ' ' + w).strip()
-        if fonts.ov_sub.size(trial)[0] > box_w - 40:
-            lines.append(cur)
-            cur = w
-        else:
-            cur = trial
-    if cur:
-        lines.append(cur)
+    lines = _wrap_text(message, fonts.ov_sub, box_w - 40)
     for i, line in enumerate(lines[:3]):
         ls = fonts.ov_sub.render(line, True, (200, 180, 180))
         screen.blit(ls, ls.get_rect(center=(box.centerx, box.y + 70 + i * 18)))

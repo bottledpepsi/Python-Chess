@@ -149,8 +149,18 @@ class StockfishBotWorker:
         needing it passed explicitly.
         """
         logger = get_logger()
+        prior_thread = self._thread
         self.cancel()
         self.join(timeout=2.0)
+        if prior_thread is not None and prior_thread.is_alive():
+            # engine.play() has no cooperative-cancel hook (see cancel()'s
+            # docstring), so a timed-out search is bounded by movetime_ms
+            # rather than abort. The stale result is discarded by the epoch
+            # guard; surface the orphan so it isn't silently lost.
+            logger.warning(
+                "Prior Stockfish search did not finish within the 2s join "
+                "timeout; discarding its result (epoch guard)."
+            )
 
         self._epoch += 1
         epoch = self._epoch
@@ -242,7 +252,9 @@ class StockfishBotWorker:
             if self._engine is not None:
                 try:
                     self._engine.quit()
-                except chess.engine.EngineError:
+                except (chess.engine.EngineError, OSError):
+                    # OSError (e.g. broken pipe) is raised if the Stockfish
+                    # process already died and isn't an EngineError subclass.
                     pass
                 self._engine = None
             self._tried_open = False
