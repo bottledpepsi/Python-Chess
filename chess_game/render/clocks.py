@@ -33,6 +33,7 @@ from __future__ import annotations
 import chess
 import pygame
 
+from chess_game.render.aa import aa_rounded_rect
 from chess_game.theme import MENU_ACCENT_BRIGHT, TRAY_H
 
 _CLOCK_W = 96
@@ -63,8 +64,8 @@ def _draw_one_clock(surface, rect, label_text, is_active, is_low, is_flagged, fo
         border_col = (60, 60, 60)
         text_col = _INACTIVE_DIM
 
-    surface.fill(bg, rect)
-    pygame.draw.rect(surface, border_col, rect, 2 if is_active else 1, border_radius=6)
+    aa_rounded_rect(surface, bg, rect, 6)
+    aa_rounded_rect(surface, border_col, rect, 6, width=2 if is_active else 1)
 
     digits = fonts.diff_n.render(label_text, True, text_col)
     surface.blit(digits, digits.get_rect(center=rect.center))

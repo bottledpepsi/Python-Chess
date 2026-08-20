@@ -32,6 +32,7 @@ from chess_game.render import history as render_history
 from chess_game.render import menus as render_menus
 from chess_game.render import overlays as render_overlays
 from chess_game.render import trays as render_trays
+from chess_game.render.aa import aa_rounded_rect, blit_button_backdrop
 from chess_game.sound import SoundManager
 from chess_game.state import GameState
 from chess_game.stockfish_bot_worker import MAX_ELO, MIN_ELO, StockfishBotWorker
@@ -1009,7 +1010,7 @@ class App:
         screens that draw their own custom rects (not Button.draw())."""
         if 0 <= focus_group.index < len(focus_group.widgets):
             focused = focus_group.widgets[focus_group.index]
-            pygame.draw.rect(self.screen, FOCUS_RING, focused.rect, 3, border_radius=8)
+            aa_rounded_rect(self.screen, FOCUS_RING, focused.rect, 8, width=3)
 
     def _update_cursor(self, mx: int, my: int) -> None:
         """Show a hand cursor over anything clickable, an arrow otherwise.
@@ -1348,10 +1349,9 @@ class App:
             # appear below (behind) the dragged piece in the z-order.
             mx_, my_ = pygame.mouse.get_pos()
             mm_hov = self.menu_btn_ingame_rect.collidepoint(mx_, my_)
-            pygame.draw.rect(self.screen, (52, 52, 52) if mm_hov else (42, 42, 42),
-                              self.menu_btn_ingame_rect, border_radius=6)
-            pygame.draw.rect(self.screen, (90, 90, 90) if mm_hov else (62, 62, 62),
-                              self.menu_btn_ingame_rect, 1, border_radius=6)
+            blit_button_backdrop(self.screen, self.menu_btn_ingame_rect, 6,
+                                  (52, 52, 52) if mm_hov else (42, 42, 42),
+                                  (90, 90, 90) if mm_hov else (62, 62, 62))
             mm_s = self.fonts.igmenu.render('\u2261  Menu', True, (210, 210, 210) if mm_hov else (140, 140, 140))
             self.screen.blit(mm_s, mm_s.get_rect(center=self.menu_btn_ingame_rect.center))
 
@@ -1369,8 +1369,7 @@ class App:
                 an_bg = (52, 52, 52) if an_hov else (42, 42, 42)
                 an_brd = (90, 90, 90) if an_hov else (62, 62, 62)
                 an_fg = (210, 210, 210) if an_hov else (140, 140, 140)
-            pygame.draw.rect(self.screen, an_bg, self.analysis_toggle_rect, border_radius=6)
-            pygame.draw.rect(self.screen, an_brd, self.analysis_toggle_rect, 1, border_radius=6)
+            blit_button_backdrop(self.screen, self.analysis_toggle_rect, 6, an_bg, an_brd)
             an_s = self.fonts.igmenu.render('A', True, an_fg)
             self.screen.blit(an_s, an_s.get_rect(center=self.analysis_toggle_rect.center))
 
@@ -1401,8 +1400,7 @@ class App:
                     pause_brd = (90, 90, 90) if pause_hov else (62, 62, 62)
                     pause_fg = (210, 210, 210) if pause_hov else (140, 140, 140)
                     pause_label = '\u23f8 Pause'
-                pygame.draw.rect(self.screen, pause_bg, self.em_pause_btn_rect, border_radius=6)
-                pygame.draw.rect(self.screen, pause_brd, self.em_pause_btn_rect, 1, border_radius=6)
+                blit_button_backdrop(self.screen, self.em_pause_btn_rect, 6, pause_bg, pause_brd)
                 pause_s = self.fonts.igmenu.render(pause_label, True, pause_fg)
                 self.screen.blit(pause_s, pause_s.get_rect(center=self.em_pause_btn_rect.center))
 
@@ -1420,8 +1418,7 @@ class App:
                     step_bg = (32, 32, 32)
                     step_brd = (46, 46, 46)
                     step_fg = (78, 78, 78)
-                pygame.draw.rect(self.screen, step_bg, self.em_step_btn_rect, border_radius=6)
-                pygame.draw.rect(self.screen, step_brd, self.em_step_btn_rect, 1, border_radius=6)
+                blit_button_backdrop(self.screen, self.em_step_btn_rect, 6, step_bg, step_brd)
                 step_s = self.fonts.igmenu.render('Step', True, step_fg)
                 self.screen.blit(step_s, step_s.get_rect(center=self.em_step_btn_rect.center))
             else:
@@ -1454,26 +1451,29 @@ class App:
                 exp_bg = (52, 52, 52) if export_hov else (42, 42, 42)
                 exp_brd = (90, 90, 90) if export_hov else (62, 62, 62)
                 exp_fg = (210, 210, 210) if export_hov else (140, 140, 140)
-                pygame.draw.rect(self.screen, exp_bg, self.export_btn_ingame_rect, border_radius=6)
-                pygame.draw.rect(self.screen, exp_brd, self.export_btn_ingame_rect, 1, border_radius=6)
+                blit_button_backdrop(self.screen, self.export_btn_ingame_rect, 6, exp_bg, exp_brd)
                 exp_s = self.fonts.igmenu.render('Export PGN', True, exp_fg)
                 self.screen.blit(exp_s, exp_s.get_rect(center=self.export_btn_ingame_rect.center))
 
                 draw_hov = self.draw_btn_ingame_rect.collidepoint(mx_, my_)
                 dr_accent = (110, 100, 55)
-                dr_bg = tuple(min(255, int(c * (0.48 if draw_hov else 0.28))) for c in dr_accent)
-                dr_brd = dr_accent if draw_hov else tuple(int(c * 0.58) for c in dr_accent)
-                pygame.draw.rect(self.screen, dr_bg, self.draw_btn_ingame_rect, border_radius=6)
-                pygame.draw.rect(self.screen, dr_brd, self.draw_btn_ingame_rect, 1, border_radius=6)
+                dr_r, dr_g, dr_b = dr_accent
+                dr_mul = 0.48 if draw_hov else 0.28
+                dr_bg = (min(255, int(dr_r * dr_mul)), min(255, int(dr_g * dr_mul)),
+                          min(255, int(dr_b * dr_mul)))
+                dr_brd = dr_accent if draw_hov else (int(dr_r * 0.58), int(dr_g * 0.58), int(dr_b * 0.58))
+                blit_button_backdrop(self.screen, self.draw_btn_ingame_rect, 6, dr_bg, dr_brd)
                 dr_s = self.fonts.igmenu.render('Offer Draw', True, (210, 210, 210) if draw_hov else (170, 170, 160))
                 self.screen.blit(dr_s, dr_s.get_rect(center=self.draw_btn_ingame_rect.center))
 
                 resign_hov = self.resign_btn_ingame_rect.collidepoint(mx_, my_)
                 rs_accent = (140, 85, 45)
-                rs_bg = tuple(min(255, int(c * (0.48 if resign_hov else 0.28))) for c in rs_accent)
-                rs_brd = rs_accent if resign_hov else tuple(int(c * 0.58) for c in rs_accent)
-                pygame.draw.rect(self.screen, rs_bg, self.resign_btn_ingame_rect, border_radius=6)
-                pygame.draw.rect(self.screen, rs_brd, self.resign_btn_ingame_rect, 1, border_radius=6)
+                rs_r, rs_g, rs_b = rs_accent
+                rs_mul = 0.48 if resign_hov else 0.28
+                rs_bg = (min(255, int(rs_r * rs_mul)), min(255, int(rs_g * rs_mul)),
+                          min(255, int(rs_b * rs_mul)))
+                rs_brd = rs_accent if resign_hov else (int(rs_r * 0.58), int(rs_g * 0.58), int(rs_b * 0.58))
+                blit_button_backdrop(self.screen, self.resign_btn_ingame_rect, 6, rs_bg, rs_brd)
                 rs_s = self.fonts.igmenu.render('Resign', True, (230, 210, 200) if resign_hov else (190, 160, 140))
                 self.screen.blit(rs_s, rs_s.get_rect(center=self.resign_btn_ingame_rect.center))
 

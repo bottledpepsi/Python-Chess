@@ -7,10 +7,12 @@ widget-level.
 """
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
 
 import pygame
 
+from chess_game.render.aa import aa_circle, aa_polygon, aa_rounded_rect, blit_button_backdrop
 from chess_game.theme import (
     MENU_BTN_BRD,
     MENU_BTN_DIS,
@@ -22,6 +24,46 @@ from chess_game.theme import (
 )
 
 FOCUS_RING = (140, 190, 250)
+
+
+def _aa_thick_line(surface: pygame.Surface, color, p1: tuple[int, int],
+                    p2: tuple[int, int], width: int) -> None:
+    """Anti-aliased version of pygame.draw.line for a single diagonal
+    segment, used only by MenuCard's home-icon glyphs (see _draw_icon)
+    where a couple of strokes are at an angle rather than axis-aligned.
+    Expressed as a `width`-px-wide quad along p1->p2 so it can reuse
+    aa_polygon rather than needing its own mask/erosion logic."""
+    x1, y1 = p1
+    x2, y2 = p2
+    length = math.hypot(x2 - x1, y2 - y1)
+    if length == 0:
+        return
+    nx, ny = -(y2 - y1) / length * width / 2, (x2 - x1) / length * width / 2
+    quad = [(x1 + nx, y1 + ny), (x2 + nx, y2 + ny), (x2 - nx, y2 - ny), (x1 - nx, y1 - ny)]
+    aa_polygon(surface, color, quad)
+
+
+def _aa_arc(surface: pygame.Surface, color, rect, start_angle: float,
+            stop_angle: float, width: int, factor: int = 4) -> None:
+    """Anti-aliased version of pygame.draw.arc, used only by MenuCard's
+    'friend' icon glyph. Wraps pygame.draw.arc directly (same
+    supersample-mask technique as aa_rounded_rect/aa_circle in
+    render/aa.py) rather than reimplementing arc geometry, so the
+    existing (rect, start_angle, stop_angle) call - and the shape it
+    happens to trace - carries over unchanged, just smoothed."""
+    rect = pygame.Rect(rect)
+    if rect.width <= 0 or rect.height <= 0:
+        return
+    w, h = rect.width, rect.height
+    margin = width + 1
+    hi = pygame.Surface(((w + margin * 2) * factor, (h + margin * 2) * factor), pygame.SRCALPHA)
+    hi_rect = pygame.Rect(margin * factor, margin * factor, w * factor, h * factor)
+    pygame.draw.arc(hi, (255, 255, 255, 255), hi_rect, start_angle, stop_angle, width * factor)
+    mask = pygame.transform.smoothscale(hi, (w + margin * 2, h + margin * 2))
+    out = pygame.Surface(mask.get_size(), pygame.SRCALPHA)
+    out.fill((*color, 255))
+    out.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MIN)
+    surface.blit(out, (rect.x - margin, rect.y - margin))
 
 
 class Button:
@@ -37,10 +79,9 @@ class Button:
         mx, my = pygame.mouse.get_pos()
         hov = self.rect.collidepoint(mx, my) and not self.disabled
         bg = MENU_BTN_DIS if self.disabled else (MENU_BTN_HOV if hov else MENU_BTN_NORM)
-        pygame.draw.rect(surface, bg, self.rect, border_radius=10)
-        pygame.draw.rect(surface, MENU_BTN_BRD, self.rect, 2, border_radius=10)
+        blit_button_backdrop(surface, self.rect, 10, bg, MENU_BTN_BRD, border_width=2)
         if self.focused and not self.disabled:
-            pygame.draw.rect(surface, FOCUS_RING, self.rect, 2, border_radius=10)
+            aa_rounded_rect(surface, FOCUS_RING, self.rect, 10, width=2)
         tc = MENU_TEXT_DIS if self.disabled else MENU_TEXT
         lbl = fonts.btn.render(self.label, True, tc)
         surface.blit(lbl, lbl.get_rect(
@@ -82,16 +123,13 @@ class MenuCard(Button):
         bg = (48, 48, 54) if hov else (31, 31, 36)
         border = self.accent if hov else (68, 68, 76)
 
-        pygame.draw.rect(surface, bg, self.rect, border_radius=14)
-        pygame.draw.rect(surface, border, self.rect, 2 if hov else 1,
-                         border_radius=14)
-        pygame.draw.rect(surface, self.accent,
-                         (self.rect.x, self.rect.y + 14, 4, self.rect.height - 28),
-                         border_radius=2)
+        blit_button_backdrop(surface, self.rect, 14, bg, border, border_width=2 if hov else 1)
+        aa_rounded_rect(surface, self.accent,
+                        (self.rect.x, self.rect.y + 14, 4, self.rect.height - 28), 2)
 
         badge_center = (self.rect.x + 48, self.rect.centery)
-        pygame.draw.circle(surface, (24, 24, 28), badge_center, 24)
-        pygame.draw.circle(surface, self.accent, badge_center, 24, 2)
+        aa_circle(surface, (24, 24, 28), badge_center, 24)
+        aa_circle(surface, self.accent, badge_center, 24, 2)
         self._draw_icon(surface, badge_center)
 
         label = fonts.btn.render(self.label, True, MENU_TEXT)
@@ -102,30 +140,30 @@ class MenuCard(Button):
         chevron = fonts.pick.render('\u203a', True, self.accent if hov else MENU_TEXT_SUB)
         surface.blit(chevron, chevron.get_rect(midright=(self.rect.right - 18, self.rect.centery)))
         if self.focused:
-            pygame.draw.rect(surface, FOCUS_RING, self.rect, 3, border_radius=14)
+            aa_rounded_rect(surface, FOCUS_RING, self.rect, 14, width=3)
 
     def _draw_icon(self, surface: pygame.Surface, center: tuple[int, int]) -> None:
         """Draw compact, font-independent icons for the four home actions."""
         x, y = center
         if self.icon == 'friend':
             for dx, dy in ((-7, -5), (7, -5)):
-                pygame.draw.circle(surface, self.accent, (x + dx, y + dy), 5, 2)
-                pygame.draw.arc(surface, self.accent, (x + dx - 7, y + dy + 4, 14, 12),
-                                190, 350, 2)
+                aa_circle(surface, self.accent, (x + dx, y + dy), 5, 2)
+                _aa_arc(surface, self.accent, (x + dx - 7, y + dy + 4, 14, 12), 190, 350, 2)
         elif self.icon == 'computer':
-            pygame.draw.rect(surface, self.accent, (x - 12, y - 10, 24, 16), 2, border_radius=2)
-            pygame.draw.line(surface, self.accent, (x, y + 6), (x, y + 11), 2)
-            pygame.draw.line(surface, self.accent, (x - 7, y + 12), (x + 7, y + 12), 2)
+            aa_rounded_rect(surface, self.accent, (x - 12, y - 10, 24, 16), 2, width=2)
+            pygame.draw.line(surface, self.accent, (x - 0.5, y + 6), (x - 0.5, y + 11), 2)
+            pygame.draw.line(surface, self.accent, (x - 8, y + 12), (x + 7, y + 12), 2)
         elif self.icon == 'match':
             pygame.draw.line(surface, self.accent, (x - 13, y - 7), (x + 13, y - 7), 2)
-            pygame.draw.line(surface, self.accent, (x + 13, y - 7), (x + 8, y - 12), 2)
-            pygame.draw.line(surface, self.accent, (x + 13, y - 7), (x + 8, y - 2), 2)
             pygame.draw.line(surface, self.accent, (x + 13, y + 7), (x - 13, y + 7), 2)
-            pygame.draw.line(surface, self.accent, (x - 13, y + 7), (x - 8, y + 2), 2)
-            pygame.draw.line(surface, self.accent, (x - 13, y + 7), (x - 8, y + 12), 2)
+            for p1, p2 in (
+                ((x + 121, y - 7), (x + 8, y - 12)), ((x + 13, y - 7), (x + 8, y - 2)),
+                ((x - 13, y + 7), (x - 8, y + 2)), ((x - 13, y + 7), (x - 8, y + 12)),
+            ):
+                _aa_thick_line(surface, self.accent, p1, p2, 2)
         elif self.icon == 'preferences':
-            pygame.draw.circle(surface, self.accent, center, 8, 2)
-            pygame.draw.circle(surface, self.accent, center, 2)
+            aa_circle(surface, self.accent, center, 8, 2)
+            aa_circle(surface, self.accent, center, 2)
             for dx, dy in ((0, -12), (12, 0), (0, 12), (-12, 0)):
                 pygame.draw.line(surface, self.accent, (x + dx // 2, y + dy // 2), (x + dx, y + dy), 3)
 

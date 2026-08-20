@@ -7,6 +7,7 @@ from __future__ import annotations
 import chess
 import pygame
 
+from chess_game.render.aa import aa_circle
 from chess_game.theme import (
     BOARD_PX,
     BOARD_THEMES,
@@ -28,13 +29,20 @@ _ind_ring: pygame.Surface | None = None
 
 
 def _indicators() -> tuple[pygame.Surface, pygame.Surface]:
-    """Lazily build (and cache) the move-indicator dot/ring surfaces."""
+    """Lazily build (and cache) the move-indicator dot/ring surfaces.
+
+    Built once (see the module-level cache above) and reused for every
+    highlighted square every frame, so the one-off cost of anti-aliasing
+    them here never repeats - unlike most of this module's rects, these
+    are small circles where pygame.draw.circle's aliasing is genuinely
+    visible at typical zoom.
+    """
     global _ind_dot, _ind_ring
     if _ind_dot is None or _ind_ring is None:
         dot = pygame.Surface((TILE, TILE), pygame.SRCALPHA)
         ring = pygame.Surface((TILE, TILE), pygame.SRCALPHA)
-        pygame.draw.circle(dot, (0, 0, 0, 80), (_IND_R, _IND_R), _IND_R // 3)
-        pygame.draw.circle(ring, (0, 0, 0, 85), (_IND_R, _IND_R), _IND_R - 4, 6)
+        aa_circle(dot, (0, 0, 0, 80), (_IND_R, _IND_R), _IND_R // 3)
+        aa_circle(ring, (0, 0, 0, 85), (_IND_R, _IND_R), _IND_R - 4, 6)
         _ind_dot, _ind_ring = dot, ring
     return _ind_dot, _ind_ring
 

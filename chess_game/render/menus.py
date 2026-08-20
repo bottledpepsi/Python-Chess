@@ -8,6 +8,7 @@ from __future__ import annotations
 import pygame
 
 from chess_game.engine.bot import DIFFICULTY_CONFIG
+from chess_game.render.aa import aa_circle, aa_rounded_rect
 from chess_game.stockfish_bot_worker import MAX_ELO, MIN_ELO
 from chess_game.theme import (
     ARROW_THEMES,
@@ -128,8 +129,8 @@ def draw_color_picker(screen, fonts, king_imgs):
         by_ = WIN_H // 2 - bh // 2
         rect = pygame.Rect(bx, by_, bw, bh)
         hov = rect.collidepoint(mx, my)
-        pygame.draw.rect(screen, bg, rect, border_radius=12)
-        pygame.draw.rect(screen, PICK_HOVER if hov else (90, 90, 90), rect, 3, border_radius=12)
+        aa_rounded_rect(screen, bg, rect, 12)
+        aa_rounded_rect(screen, PICK_HOVER if hov else (90, 90, 90), rect, 12, width=3)
         img = king_imgs[color]
         screen.blit(img, img.get_rect(center=(bx + bw // 2, by_ + bh // 2 - 15)))
         lbl = fonts.btn.render(label, True, fg)
@@ -142,9 +143,9 @@ def draw_color_picker(screen, fonts, king_imgs):
 
 def _draw_slider_track(screen, value, vmin, vmax, sl_x, sl_w, sl_y, color, fonts):
     t = (value - vmin) / (vmax - vmin)
-    pygame.draw.rect(screen, (48, 48, 48), (sl_x, sl_y - 4, sl_w, 8), border_radius=4)
+    aa_rounded_rect(screen, (48, 48, 48), (sl_x, sl_y - 4, sl_w, 8), 4)
     fill_w = max(8, int(sl_w * t))
-    pygame.draw.rect(screen, color, (sl_x, sl_y - 4, fill_w, 8), border_radius=4)
+    aa_rounded_rect(screen, color, (sl_x, sl_y - 4, fill_w, 8), 4)
     steps = vmax - vmin
     for i in range(steps + 1):
         tx = sl_x + int(sl_w * i / steps)
@@ -153,8 +154,8 @@ def _draw_slider_track(screen, value, vmin, vmax, sl_x, sl_w, sl_y, color, fonts
             t_s = fonts.count.render(str(vmin + i), True, (100, 100, 100))
             screen.blit(t_s, t_s.get_rect(center=(tx, sl_y + 20)))
     hx = sl_x + int(sl_w * t)
-    pygame.draw.circle(screen, (30, 30, 30), (hx, sl_y), 12)
-    pygame.draw.circle(screen, color, (hx, sl_y), 12, 3)
+    aa_circle(screen, (30, 30, 30), (hx, sl_y), 12)
+    aa_circle(screen, color, (hx, sl_y), 12, 3)
 
 
 def _draw_elo_slider_track(screen, value, vmin, vmax, sl_x, sl_w, sl_y, color, fonts):
@@ -168,9 +169,9 @@ def _draw_elo_slider_track(screen, value, vmin, vmax, sl_x, sl_w, sl_y, color, f
     actual ELO value, while the fill/handle math is identical.
     """
     t = (value - vmin) / (vmax - vmin)
-    pygame.draw.rect(screen, (48, 48, 48), (sl_x, sl_y - 4, sl_w, 8), border_radius=4)
+    aa_rounded_rect(screen, (48, 48, 48), (sl_x, sl_y - 4, sl_w, 8), 4)
     fill_w = max(8, int(sl_w * t))
-    pygame.draw.rect(screen, color, (sl_x, sl_y - 4, fill_w, 8), border_radius=4)
+    aa_rounded_rect(screen, color, (sl_x, sl_y - 4, fill_w, 8), 4)
 
     n_ticks = 4  # vmin, 1/4, 1/2, 3/4, vmax => 5 points, 4 intervals
     for i in range(n_ticks + 1):
@@ -182,8 +183,8 @@ def _draw_elo_slider_track(screen, value, vmin, vmax, sl_x, sl_w, sl_y, color, f
         screen.blit(t_s, t_s.get_rect(center=(tx, sl_y + 20)))
 
     hx = sl_x + int(sl_w * t)
-    pygame.draw.circle(screen, (30, 30, 30), (hx, sl_y), 12)
-    pygame.draw.circle(screen, color, (hx, sl_y), 12, 3)
+    aa_circle(screen, (30, 30, 30), (hx, sl_y), 12)
+    aa_circle(screen, color, (hx, sl_y), 12, 3)
 
 
 def draw_difficulty(screen, level, fonts):
@@ -240,9 +241,9 @@ def draw_difficulty(screen, level, fonts):
     mx_, my_ = pygame.mouse.get_pos()
     hov = btn.collidepoint(mx_, my_)
     bg_col = tuple(min(255, int(c * (0.38 if hov else 0.22))) for c in col)
-    pygame.draw.rect(screen, bg_col, btn, border_radius=10)
+    aa_rounded_rect(screen, bg_col, btn, 10)
     brd_col = col if hov else tuple(int(c * 0.55) for c in col)
-    pygame.draw.rect(screen, brd_col, btn, 2 if hov else 1, border_radius=10)
+    aa_rounded_rect(screen, brd_col, btn, 10, width=2 if hov else 1)
     btn_lbl = fonts.btn.render('Start Game', True, MENU_TEXT)
     screen.blit(btn_lbl, btn_lbl.get_rect(center=btn.center))
 
@@ -313,8 +314,8 @@ def draw_stockfish_difficulty(screen, elo, fonts):
     badge_rect = pygame.Rect(0, 0, badge_s.get_width() + badge_pad_x * 2,
                               badge_s.get_height() + badge_pad_y * 2)
     badge_rect.center = (cx, 104)
-    pygame.draw.rect(screen, (46, 78, 46), badge_rect, border_radius=badge_rect.height // 2)
-    pygame.draw.rect(screen, (90, 150, 90), badge_rect, 1, border_radius=badge_rect.height // 2)
+    aa_rounded_rect(screen, (46, 78, 46), badge_rect, badge_rect.height // 2)
+    aa_rounded_rect(screen, (90, 150, 90), badge_rect, badge_rect.height // 2, width=1)
     screen.blit(badge_s, badge_s.get_rect(center=badge_rect.center))
 
     num_s = fonts.win.render(str(elo), True, col)
@@ -346,9 +347,9 @@ def draw_stockfish_difficulty(screen, elo, fonts):
     mx_, my_ = pygame.mouse.get_pos()
     hov = btn.collidepoint(mx_, my_)
     bg_col = tuple(min(255, int(c * (0.38 if hov else 0.22))) for c in col)
-    pygame.draw.rect(screen, bg_col, btn, border_radius=10)
+    aa_rounded_rect(screen, bg_col, btn, 10)
     brd_col = col if hov else tuple(int(c * 0.55) for c in col)
-    pygame.draw.rect(screen, brd_col, btn, 2 if hov else 1, border_radius=10)
+    aa_rounded_rect(screen, brd_col, btn, 10, width=2 if hov else 1)
     btn_lbl = fonts.btn.render("Start Game", True, MENU_TEXT)
     screen.blit(btn_lbl, btn_lbl.get_rect(center=btn.center))
 
@@ -426,7 +427,7 @@ def draw_engine_match_setup(screen, em_white_kind, em_white_level, em_white_elo,
         y = col_y
 
         header = pygame.Rect(x0, y, col_w, 36)
-        pygame.draw.rect(screen, header_bg, header, border_radius=8)
+        aa_rounded_rect(screen, header_bg, header, 8)
         label = fonts.btn.render(side.capitalize(), True, header_col)
         screen.blit(label, label.get_rect(center=header.center))
         y = header.bottom + 14
@@ -442,8 +443,8 @@ def draw_engine_match_setup(screen, em_white_kind, em_white_level, em_white_elo,
             selected = (kind == key)
             bg = MENU_ACCENT if selected else ((44, 44, 50) if hov else (36, 36, 42))
             brd = MENU_ACCENT_BRIGHT if selected else ((90, 90, 98) if hov else (66, 66, 74))
-            pygame.draw.rect(screen, bg, rect, border_radius=8)
-            pygame.draw.rect(screen, brd, rect, 2 if selected else 1, border_radius=8)
+            aa_rounded_rect(screen, bg, rect, 8)
+            aa_rounded_rect(screen, brd, rect, 8, width=2 if selected else 1)
             lbl_col = MENU_ACCENT_TEXT if selected else MENU_TEXT_SUB
             lbl_s = fonts.btn_sub.render(seg_label, True, lbl_col)
             screen.blit(lbl_s, lbl_s.get_rect(center=rect.center))
@@ -524,8 +525,8 @@ def draw_engine_match_setup(screen, em_white_kind, em_white_level, em_white_elo,
     btn = pygame.Rect(cx - bw // 2, divider_bottom + 20, bw, bh)
     hov = btn.collidepoint(mx, my)
     bg_col = (58, 58, 92) if hov else (40, 40, 62)
-    pygame.draw.rect(screen, bg_col, btn, border_radius=10)
-    pygame.draw.rect(screen, MENU_ACCENT_BRIGHT if hov else MENU_ACCENT, btn, 2 if hov else 1, border_radius=10)
+    aa_rounded_rect(screen, bg_col, btn, 10)
+    aa_rounded_rect(screen, MENU_ACCENT_BRIGHT if hov else MENU_ACCENT, btn, 10, width=2 if hov else 1)
     btn_lbl = fonts.btn.render('Start Match', True, MENU_TEXT)
     screen.blit(btn_lbl, btn_lbl.get_rect(center=btn.center))
     rects['confirm'] = btn
@@ -601,8 +602,8 @@ def draw_time_control_picker(screen, selected, fonts):
         else:
             bg = (42, 42, 48) if hov else (30, 30, 34)
             border_col = (90, 90, 90) if hov else (62, 62, 68)
-        pygame.draw.rect(screen, bg, rect, border_radius=12)
-        pygame.draw.rect(screen, border_col, rect, 2 if (is_selected or hov) else 1, border_radius=12)
+        aa_rounded_rect(screen, bg, rect, 12)
+        aa_rounded_rect(screen, border_col, rect, 12, width=2 if (is_selected or hov) else 1)
 
         label_col = MENU_ACCENT_BRIGHT if is_selected else MENU_TEXT
         lbl = fonts.pick.render(_TIME_CONTROL_LABELS[key], True, label_col)
@@ -620,9 +621,9 @@ def draw_time_control_picker(screen, selected, fonts):
     btn = pygame.Rect(cx - bw // 2, grid_bottom + 48, bw, bh)
     hov_btn = btn.collidepoint(mx, my)
     bg_col = (58, 86, 50) if hov_btn else (40, 58, 36)
-    pygame.draw.rect(screen, bg_col, btn, border_radius=10)
+    aa_rounded_rect(screen, bg_col, btn, 10)
     brd_col = MENU_ACCENT_BRIGHT if hov_btn else MENU_ACCENT
-    pygame.draw.rect(screen, brd_col, btn, 2 if hov_btn else 1, border_radius=10)
+    aa_rounded_rect(screen, brd_col, btn, 10, width=2 if hov_btn else 1)
     btn_lbl = fonts.btn.render('Start Game', True, MENU_TEXT)
     screen.blit(btn_lbl, btn_lbl.get_rect(center=btn.center))
 
@@ -672,8 +673,8 @@ def draw_preferences(screen, current_board_theme, current_arrow_theme, reduced_m
     # ── Helper: draw a section card (rounded panel with a heading) ─────
     def _section_card(y, h, heading, description):
         rect = pygame.Rect(cx - 280, y, 560, h)
-        pygame.draw.rect(screen, (26, 26, 30), rect, border_radius=12)
-        pygame.draw.rect(screen, (52, 52, 58), rect, 1, border_radius=12)
+        aa_rounded_rect(screen, (26, 26, 30), rect, 12)
+        aa_rounded_rect(screen, (52, 52, 58), rect, 12, width=1)
         h_s = fonts.diff_l.render(heading, True, MENU_TEXT)
         screen.blit(h_s, (rect.x + 20, rect.y + 14))
         d_s = fonts.btn_sub.render(description, True, MENU_TEXT_SUB)
@@ -701,12 +702,15 @@ def draw_preferences(screen, current_board_theme, current_arrow_theme, reduced_m
 
         # Preview: two side-by-side squares showing the light/dark colours.
         half_w = (swatch_w - 4) // 2
-        pygame.draw.rect(screen, theme['light'], (rect.x + 2, rect.y + 2, half_w, swatch_h - 4), border_top_left_radius=8, border_bottom_left_radius=8)
-        pygame.draw.rect(screen, theme['dark'], (rect.x + 2 + half_w, rect.y + 2, swatch_w - 4 - half_w, swatch_h - 4), border_top_right_radius=8, border_bottom_right_radius=8)
+        aa_rounded_rect(screen, theme['light'], (rect.x + 2, rect.y + 2, half_w, swatch_h - 4), 0,
+                         border_top_left_radius=8, border_bottom_left_radius=8)
+        aa_rounded_rect(screen, theme['dark'],
+                         (rect.x + 2 + half_w, rect.y + 2, swatch_w - 4 - half_w, swatch_h - 4), 0,
+                         border_top_right_radius=8, border_bottom_right_radius=8)
 
         border_col = MENU_ACCENT_BRIGHT if selected else ((90, 90, 96) if hov else (60, 60, 66))
         border_width = 3 if selected else 2
-        pygame.draw.rect(screen, border_col, rect, border_width, border_radius=10)
+        aa_rounded_rect(screen, border_col, rect, 10, width=border_width)
 
         lbl_col = MENU_TEXT if selected else MENU_TEXT_SUB
         lbl = fonts.btn_sub.render(label, True, lbl_col)
@@ -732,12 +736,12 @@ def draw_preferences(screen, current_board_theme, current_arrow_theme, reduced_m
         selected = (current_arrow_theme == theme_name)
 
         # Preview: a centred filled circle in the arrow colour.
-        pygame.draw.circle(screen, display_color, (rect.centerx, rect.centery - 4), 20)
-        pygame.draw.circle(screen, (30, 30, 30), (rect.centerx, rect.centery - 4), 20, 1)
+        aa_circle(screen, display_color, (rect.centerx, rect.centery - 4), 20)
+        aa_circle(screen, (30, 30, 30), (rect.centerx, rect.centery - 4), 20, 1)
 
         border_col = MENU_ACCENT_BRIGHT if selected else ((90, 90, 96) if hov else (60, 60, 66))
         border_width = 3 if selected else 2
-        pygame.draw.rect(screen, border_col, rect, border_width, border_radius=10)
+        aa_rounded_rect(screen, border_col, rect, 10, width=border_width)
 
         lbl_col = MENU_TEXT if selected else MENU_TEXT_SUB
         lbl = fonts.btn_sub.render(label, True, lbl_col)
@@ -759,10 +763,10 @@ def draw_preferences(screen, current_board_theme, current_arrow_theme, reduced_m
         rect = pygame.Rect(x_right - pill_w, motion_card.y + 50, pill_w, pill_h)
         hov = rect.collidepoint(mx, my)
         track_col = MENU_ACCENT_BRIGHT if on else ((70, 70, 76) if hov else (50, 50, 56))
-        pygame.draw.rect(screen, track_col, rect, border_radius=pill_h // 2)
+        aa_rounded_rect(screen, track_col, rect, pill_h // 2)
         knob_r = pill_h // 2 - 4
         knob_x = rect.right - knob_r - 4 if on else rect.x + knob_r + 4
-        pygame.draw.circle(screen, (235, 235, 235), (knob_x, rect.centery), knob_r)
+        aa_circle(screen, (235, 235, 235), (knob_x, rect.centery), knob_r)
         return rect
 
     # Right-hand toggle: Sound Effects.
@@ -805,8 +809,8 @@ def draw_preferences(screen, current_board_theme, current_arrow_theme, reduced_m
         selected = (bot_engine_pref == key)
         bg = MENU_ACCENT if selected else ((44, 44, 50) if hov else (36, 36, 42))
         brd = MENU_ACCENT_BRIGHT if selected else ((90, 90, 98) if hov else (66, 66, 74))
-        pygame.draw.rect(screen, bg, rect, border_radius=8)
-        pygame.draw.rect(screen, brd, rect, 2 if selected else 1, border_radius=8)
+        aa_rounded_rect(screen, bg, rect, 8)
+        aa_rounded_rect(screen, brd, rect, 8, width=2 if selected else 1)
         lbl_col = MENU_ACCENT_TEXT if selected else MENU_TEXT_SUB
         lbl_s = fonts.btn_sub.render(label, True, lbl_col)
         screen.blit(lbl_s, lbl_s.get_rect(center=rect.center))
@@ -874,8 +878,8 @@ def draw_preferences(screen, current_board_theme, current_arrow_theme, reduced_m
     else:
         btn_bg = (44, 44, 50) if hov else (36, 36, 42)
         btn_brd = (90, 90, 98) if hov else (66, 66, 74)
-    pygame.draw.rect(screen, btn_bg, download_rect, border_radius=8)
-    pygame.draw.rect(screen, btn_brd, download_rect, 1, border_radius=8)
+    aa_rounded_rect(screen, btn_bg, download_rect, 8)
+    aa_rounded_rect(screen, btn_brd, download_rect, 8, width=1)
 
     if status == 'downloading':
         btn_label = (f'Downloading… {int(download_progress * 100)}%'
@@ -921,8 +925,8 @@ def draw_main_menu_overlay(screen, fonts, panel_x):
     cy = WIN_H // 2
     bw, bh = 320, 220
     box = pygame.Rect(cx - bw // 2, cy - bh // 2, bw, bh)
-    pygame.draw.rect(screen, (30, 30, 30), box, border_radius=14)
-    pygame.draw.rect(screen, (66, 66, 66), box, 2, border_radius=14)
+    aa_rounded_rect(screen, (30, 30, 30), box, 14)
+    aa_rounded_rect(screen, (66, 66, 66), box, 14, width=2)
 
     t_s = fonts.ov_title.render('Game Menu', True, MENU_TEXT)
     screen.blit(t_s, t_s.get_rect(center=(cx, box.y + 34)))
@@ -940,9 +944,9 @@ def draw_main_menu_overlay(screen, fonts, panel_x):
     ):
         hov = btn.collidepoint(mx_, my_)
         bg = tuple(min(255, int(c * (0.48 if hov else 0.28))) for c in accent)
-        pygame.draw.rect(screen, bg, btn, border_radius=8)
+        aa_rounded_rect(screen, bg, btn, 8)
         brd = accent if hov else tuple(int(c * 0.58) for c in accent)
-        pygame.draw.rect(screen, brd, btn, 1, border_radius=8)
+        aa_rounded_rect(screen, brd, btn, 8, width=1)
         l_s = font.render(label, True, MENU_TEXT)
         screen.blit(l_s, l_s.get_rect(center=btn.center))
 
@@ -976,8 +980,8 @@ def draw_engine_match_menu_overlay(screen, fonts, panel_x):
     cy = WIN_H // 2
     bw, bh = 320, 220
     box = pygame.Rect(cx - bw // 2, cy - bh // 2, bw, bh)
-    pygame.draw.rect(screen, (30, 30, 30), box, border_radius=14)
-    pygame.draw.rect(screen, (66, 66, 66), box, 2, border_radius=14)
+    aa_rounded_rect(screen, (30, 30, 30), box, 14)
+    aa_rounded_rect(screen, (66, 66, 66), box, 14, width=2)
 
     t_s = fonts.ov_title.render('Match Menu', True, MENU_TEXT)
     screen.blit(t_s, t_s.get_rect(center=(cx, box.y + 34)))
@@ -995,9 +999,9 @@ def draw_engine_match_menu_overlay(screen, fonts, panel_x):
     ):
         hov = btn.collidepoint(mx_, my_)
         bg = tuple(min(255, int(c * (0.48 if hov else 0.28))) for c in accent)
-        pygame.draw.rect(screen, bg, btn, border_radius=8)
+        aa_rounded_rect(screen, bg, btn, 8)
         brd = accent if hov else tuple(int(c * 0.58) for c in accent)
-        pygame.draw.rect(screen, brd, btn, 1, border_radius=8)
+        aa_rounded_rect(screen, brd, btn, 8, width=1)
         l_s = fonts.ov_btn_sm.render(label, True, MENU_TEXT)
         screen.blit(l_s, l_s.get_rect(center=btn.center))
 

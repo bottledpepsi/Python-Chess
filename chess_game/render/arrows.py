@@ -8,6 +8,7 @@ import math
 import pygame
 
 from chess_game.layout import arrow_path
+from chess_game.render.aa import aa_polygon
 from chess_game.theme import (
     ARROW_HEAD_SIZE,
     ARROW_THEMES,
@@ -47,8 +48,8 @@ def _draw_arrow(surface, start, end, color, width=ARROW_WIDTH, head_size=ARROW_H
     wing2 = (base[0] - perp_x * head_size * 0.55,
              base[1] - perp_y * head_size * 0.55)
 
-    pygame.draw.polygon(surface, color, [p1, p2, p3, p4])
-    pygame.draw.polygon(surface, color, [tip, wing1, wing2])
+    aa_polygon(surface, color, [p1, p2, p3, p4])
+    aa_polygon(surface, color, [tip, wing1, wing2])
 
 
 def _draw_polyline_arrow(surface, points, color, width=ARROW_WIDTH, head_size=ARROW_HEAD_SIZE):

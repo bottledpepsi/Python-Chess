@@ -17,6 +17,7 @@ from __future__ import annotations
 import chess
 import pygame
 
+from chess_game.render.aa import aa_rounded_rect
 from chess_game.theme import (
     BOARD_PX,
     MENU_ACCENT,
@@ -78,8 +79,8 @@ def draw_promotion_overlay(screen, board_x, board_y, turn_color, fonts,
 
     panel = pygame.Rect(box_x - 2 - board_x, box_y - lbl_h - 6 - board_y,
                          box_w + 4, box_h + lbl_h + hint_h + 12)
-    pygame.draw.rect(overlay, PROMO_BG_C, panel, border_radius=10)
-    pygame.draw.rect(overlay, PROMO_BRD, panel, 1, border_radius=10)
+    aa_rounded_rect(overlay, PROMO_BG_C, panel, 10)
+    aa_rounded_rect(overlay, PROMO_BRD, panel, 10, width=1)
     title = fonts.label.render('PROMOTE TO', True, (140, 140, 140))
     overlay.blit(title, (box_x + (box_w - title.get_width()) // 2 - board_x,
                           box_y - lbl_h - 2 - board_y))
@@ -93,16 +94,15 @@ def draw_promotion_overlay(screen, board_x, board_y, turn_color, fonts,
         hov = rect.collidepoint(mx, my)
         rect_local = pygame.Rect(rect.x - board_x, rect.y - board_y,
                                   rect.width, rect.height)
-        pygame.draw.rect(overlay, PROMO_HOV if hov else PROMO_NORM,
-                          rect_local, border_radius=7)
+        aa_rounded_rect(overlay, PROMO_HOV if hov else PROMO_NORM, rect_local, 7)
         if hov:
-            pygame.draw.rect(overlay, (150, 150, 150), rect_local, 1, border_radius=7)
+            aa_rounded_rect(overlay, (150, 150, 150), rect_local, 7, width=1)
             tip = fonts.label.render(label, True, (220, 220, 220))
             tip_w = tip.get_width() + 10
             tip_x = rect.centerx - tip_w // 2
             tip_y = rect.top - 22
             tip_bg = pygame.Rect(tip_x - 2 - board_x, tip_y - board_y, tip_w + 4, 18)
-            pygame.draw.rect(overlay, (55, 55, 55), tip_bg, border_radius=4)
+            aa_rounded_rect(overlay, (55, 55, 55), tip_bg, 4)
             overlay.blit(tip, (tip_x + 3 - board_x, tip_y + 2 - board_y))
         img = promo_imgs_small.get(color_char + '_' + pname)
         if img:
@@ -166,10 +166,8 @@ def draw_winner(screen, win_w, win_h, panel_x, result, alpha, fonts):
                 else:
                     bg = (60, 60, 60, 210) if hov else (40, 40, 40, 190)
                     border_col = (160, 160, 160) if hov else (90, 90, 90)
-                surf = pygame.Surface((btn.width, btn.height), pygame.SRCALPHA)
-                surf.fill(bg)
-                screen.blit(surf, btn.topleft)
-                pygame.draw.rect(screen, border_col, btn, 1, border_radius=8)
+                aa_rounded_rect(screen, bg, btn, 8)
+                aa_rounded_rect(screen, border_col, btn, 8, width=1)
                 text_col = (225, 240, 220) if (primary and hov) else (220, 220, 220) if hov else (170, 170, 170)
                 lbl = fonts.btn.render(label, True, text_col)
                 lbl.set_alpha(int(a))
@@ -189,8 +187,8 @@ def draw_continue_new_overlay(screen, win_w, win_h, fonts):
 
     box_w, box_h = 360, 190
     box = pygame.Rect((win_w - box_w) // 2, (win_h - box_h) // 2, box_w, box_h)
-    pygame.draw.rect(screen, (32, 32, 32), box, border_radius=12)
-    pygame.draw.rect(screen, (70, 70, 70), box, 1, border_radius=12)
+    aa_rounded_rect(screen, (32, 32, 32), box, 12)
+    aa_rounded_rect(screen, (70, 70, 70), box, 12, width=1)
 
     title = fonts.ov_title.render('Saved game found', True, (220, 220, 220))
     screen.blit(title, title.get_rect(center=(box.centerx, box.y + 36)))
@@ -205,8 +203,8 @@ def draw_continue_new_overlay(screen, win_w, win_h, fonts):
     for rect, label, accent in ((cont_btn, 'Continue', True), (new_btn, 'New Game', False)):
         hov = rect.collidepoint(mx, my)
         bg = MENU_ACCENT if (accent and hov) else ((55, 55, 55) if hov else (42, 42, 42))
-        pygame.draw.rect(screen, bg, rect, border_radius=8)
-        pygame.draw.rect(screen, (90, 90, 90), rect, 1, border_radius=8)
+        aa_rounded_rect(screen, bg, rect, 8)
+        aa_rounded_rect(screen, (90, 90, 90), rect, 8, width=1)
         lbl = fonts.ov_btn.render(label, True, (230, 230, 230))
         screen.blit(lbl, lbl.get_rect(center=rect.center))
 
@@ -228,8 +226,8 @@ def draw_info_modal(screen, win_w, win_h, title_text, message, fonts):
 
     box_w, box_h = 420, 200
     box = pygame.Rect((win_w - box_w) // 2, (win_h - box_h) // 2, box_w, box_h)
-    pygame.draw.rect(screen, (30, 30, 30), box, border_radius=12)
-    pygame.draw.rect(screen, (66, 66, 66), box, 1, border_radius=12)
+    aa_rounded_rect(screen, (30, 30, 30), box, 12)
+    aa_rounded_rect(screen, (66, 66, 66), box, 12, width=1)
 
     title = fonts.ov_title.render(title_text, True, (220, 220, 220))
     screen.blit(title, title.get_rect(center=(box.centerx, box.y + 34)))
@@ -242,8 +240,8 @@ def draw_info_modal(screen, win_w, win_h, title_text, message, fonts):
     mx, my = pygame.mouse.get_pos()
     ok_btn = pygame.Rect(box.centerx - 70, box.bottom - 56, 140, 38)
     hov = ok_btn.collidepoint(mx, my)
-    pygame.draw.rect(screen, (55, 55, 55) if hov else (42, 42, 42), ok_btn, border_radius=8)
-    pygame.draw.rect(screen, (90, 90, 90), ok_btn, 1, border_radius=8)
+    aa_rounded_rect(screen, (55, 55, 55) if hov else (42, 42, 42), ok_btn, 8)
+    aa_rounded_rect(screen, (90, 90, 90), ok_btn, 8, width=1)
     lbl = fonts.ov_btn.render('OK', True, (220, 220, 220))
     screen.blit(lbl, lbl.get_rect(center=ok_btn.center))
     return ok_btn
@@ -264,8 +262,8 @@ def draw_confirm_modal(screen, win_w, win_h, message, fonts, confirm_label='Yes'
 
     box_w, box_h = 380, 190
     box = pygame.Rect((win_w - box_w) // 2, (win_h - box_h) // 2, box_w, box_h)
-    pygame.draw.rect(screen, (32, 30, 30), box, border_radius=12)
-    pygame.draw.rect(screen, (90, 78, 70), box, 1, border_radius=12)
+    aa_rounded_rect(screen, (32, 30, 30), box, 12)
+    aa_rounded_rect(screen, (90, 78, 70), box, 12, width=1)
 
     title = fonts.ov_title.render('Are you sure?', True, (230, 220, 210))
     screen.blit(title, title.get_rect(center=(box.centerx, box.y + 34)))
@@ -281,14 +279,14 @@ def draw_confirm_modal(screen, win_w, win_h, message, fonts, confirm_label='Yes'
     yes_btn = pygame.Rect(box.centerx + gap // 2, box.bottom - 56, btn_w, btn_h)
 
     hov = cancel_btn.collidepoint(mx, my)
-    pygame.draw.rect(screen, (55, 55, 55) if hov else (42, 42, 42), cancel_btn, border_radius=8)
-    pygame.draw.rect(screen, (90, 90, 90), cancel_btn, 1, border_radius=8)
+    aa_rounded_rect(screen, (55, 55, 55) if hov else (42, 42, 42), cancel_btn, 8)
+    aa_rounded_rect(screen, (90, 90, 90), cancel_btn, 8, width=1)
     lbl = fonts.ov_btn.render('Cancel', True, (220, 220, 220))
     screen.blit(lbl, lbl.get_rect(center=cancel_btn.center))
 
     hov = yes_btn.collidepoint(mx, my)
-    pygame.draw.rect(screen, (110, 55, 45) if hov else (85, 42, 35), yes_btn, border_radius=8)
-    pygame.draw.rect(screen, (170, 90, 75), yes_btn, 1, border_radius=8)
+    aa_rounded_rect(screen, (110, 55, 45) if hov else (85, 42, 35), yes_btn, 8)
+    aa_rounded_rect(screen, (170, 90, 75), yes_btn, 8, width=1)
     lbl = fonts.ov_btn.render(confirm_label, True, (240, 225, 220))
     screen.blit(lbl, lbl.get_rect(center=yes_btn.center))
 
@@ -303,8 +301,8 @@ def draw_error_modal(screen, win_w, win_h, message, fonts):
 
     box_w, box_h = 420, 200
     box = pygame.Rect((win_w - box_w) // 2, (win_h - box_h) // 2, box_w, box_h)
-    pygame.draw.rect(screen, (40, 28, 28), box, border_radius=12)
-    pygame.draw.rect(screen, (140, 70, 70), box, 1, border_radius=12)
+    aa_rounded_rect(screen, (40, 28, 28), box, 12)
+    aa_rounded_rect(screen, (140, 70, 70), box, 12, width=1)
 
     title = fonts.ov_title.render('Could not load save', True, (235, 200, 200))
     screen.blit(title, title.get_rect(center=(box.centerx, box.y + 34)))
@@ -317,8 +315,8 @@ def draw_error_modal(screen, win_w, win_h, message, fonts):
     mx, my = pygame.mouse.get_pos()
     ok_btn = pygame.Rect(box.centerx - 70, box.bottom - 56, 140, 38)
     hov = ok_btn.collidepoint(mx, my)
-    pygame.draw.rect(screen, (70, 45, 45) if hov else (55, 38, 38), ok_btn, border_radius=8)
-    pygame.draw.rect(screen, (140, 70, 70), ok_btn, 1, border_radius=8)
+    aa_rounded_rect(screen, (70, 45, 45) if hov else (55, 38, 38), ok_btn, 8)
+    aa_rounded_rect(screen, (140, 70, 70), ok_btn, 8, width=1)
     lbl = fonts.ov_btn.render('OK', True, (230, 210, 210))
     screen.blit(lbl, lbl.get_rect(center=ok_btn.center))
     return ok_btn

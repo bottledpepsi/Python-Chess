@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import pygame
 
+from chess_game.render.aa import aa_rounded_rect
 from chess_game.theme import (
     HIST_FOOT_H,
     HIST_HDR_H,
@@ -59,9 +60,9 @@ def draw_history_panel(screen, panel_x, panel_w, win_w, win_h,
     is_live_now = review_ply is None
     live_hov = live_btn_rect.collidepoint(mx_, my_) and not is_live_now
     live_bg = LIVE_BG_OFF if is_live_now else (LIVE_BG_HOV if live_hov else LIVE_BG_ACT)
-    pygame.draw.rect(screen, live_bg, live_btn_rect, border_radius=6)
+    aa_rounded_rect(screen, live_bg, live_btn_rect, 6)
     live_brd = (50, 50, 50) if is_live_now else (80, 155, 80)
-    pygame.draw.rect(screen, live_brd, live_btn_rect, 1, border_radius=6)
+    aa_rounded_rect(screen, live_brd, live_btn_rect, 6, width=1)
     live_label = '\u25cf LIVE' if is_live_now else 'Live'
     live_col = (55, 55, 55) if is_live_now else (190, 238, 190)
     live_s = fonts.live_btn.render(live_label, True, live_col)
@@ -117,9 +118,9 @@ def draw_history_panel(screen, panel_x, panel_w, win_w, win_h,
             w_sel = (cur_ply == w_ply)
             w_hov = w_rect.collidepoint(mx_, my_)
             if w_sel:
-                pygame.draw.rect(screen, HIST_SEL_BG, w_rect, border_radius=3)
+                aa_rounded_rect(screen, HIST_SEL_BG, w_rect, 3)
             elif w_hov:
-                pygame.draw.rect(screen, HIST_ROW_HOV, w_rect, border_radius=3)
+                aa_rounded_rect(screen, HIST_ROW_HOV, w_rect, 3)
             w_col = HIST_SEL_FG if w_sel else HIST_MOV_COL
             w_s = fonts.hist_mov.render(san_history[w_idx], True, w_col)
             screen.blit(w_s, (wx + 4, row_y + (HIST_ROW_H - w_s.get_height()) // 2))
@@ -132,9 +133,9 @@ def draw_history_panel(screen, panel_x, panel_w, win_w, win_h,
             b_sel = (cur_ply == b_ply)
             b_hov = b_rect.collidepoint(mx_, my_)
             if b_sel:
-                pygame.draw.rect(screen, HIST_SEL_BG, b_rect, border_radius=3)
+                aa_rounded_rect(screen, HIST_SEL_BG, b_rect, 3)
             elif b_hov:
-                pygame.draw.rect(screen, HIST_ROW_HOV, b_rect, border_radius=3)
+                aa_rounded_rect(screen, HIST_ROW_HOV, b_rect, 3)
             b_col = HIST_SEL_FG if b_sel else HIST_MOV_COL
             b_s = fonts.hist_mov.render(san_history[b_idx], True, b_col)
             screen.blit(b_s, (bx + 4, row_y + (HIST_ROW_H - b_s.get_height()) // 2))
@@ -146,6 +147,6 @@ def draw_history_panel(screen, panel_x, panel_w, win_w, win_h,
         sb_ratio = new_scroll / max(1, n_rows * HIST_ROW_H)
         sb_size = max(20, int(list_h * list_h / max(1, n_rows * HIST_ROW_H)))
         sb_y = list_top_y + int((list_h - sb_size) * sb_ratio)
-        pygame.draw.rect(screen, (58, 58, 58), (win_w - 5, sb_y, 4, sb_size), border_radius=2)
+        aa_rounded_rect(screen, (58, 58, 58), (win_w - 5, sb_y, 4, sb_size), 2)
 
     return ply_rects, live_btn_rect, new_scroll
